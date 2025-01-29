@@ -82,148 +82,63 @@ class IntegralImage(object):
             return free_locations[randint(0, len(free_locations) - 1)]
         
         def rectangular(width_x, height_y):
-            direction = 0
-    
-            for n in range(max(width, height)):
-                draw_trace_point(width_x, height_y)
-                
-                if (width_x, height_y) in free_locations:
-                    save_trace_img()
-                    return width_x, height_y
-        
-                if check_bounds(width_x, height_y):
-                    break
-                    
-                direction = n % 4
-                axis = n % 2
-                
-                where_to_next = [
-                    (width_x + INCREASE + n, height_y, DEFAULT_STEP), # right
-                    (width_x, height_y + INCREASE + n, DEFAULT_STEP), # up
-                    (width_x - INCREASE - n, height_y, -DEFAULT_STEP), # left
-                    (width_x, height_y - INCREASE - n, -DEFAULT_STEP) # down
-                ]
-
-                end_x, end_y, defined_step = where_to_next[direction]
-                    
-                start_point, stop_point = (width_x, end_x) if (width_x != end_x) else (height_y, end_y)
-                
-                for current_position in range(start_point, stop_point, defined_step):
-                    position_x, position_y = (current_position, height_y) if (axis == 0) else (width_x, current_position)
-                    
-                    draw_trace_point(position_x, position_y)
-                        
-                    if (position_x, position_y) in free_locations:
-                        save_trace_img()
-                        return position_x, position_y
-                    
-                width_x, height_y = end_x, end_y
-                
-            save_trace_img()
-            return None
-            # return rectangular_code(width_x, height_y, reverse=False)
+            return rectangular_code(width_x, height_y, reverse=False)
         
         def rectangular_reverse(width_x, height_y):
-            height_y = 0
-            width_x = 0
-            max_width = width - size_x
-            max_height = height - size_y
-            
+            return rectangular_code(0, 0, reverse=True)
+        
+        def rectangular_code(width_x, height_y, reverse=False):
+            max_width = width - size_x if reverse else width
+            max_height = height - size_y if reverse else height
+
             direction = 0
-    
+
             for n in range(max(width, height)):
                 draw_trace_point(width_x, height_y)
-                
+
                 if (width_x, height_y) in free_locations:
                     save_trace_img()
                     return width_x, height_y
-        
+
                 if check_bounds(width_x, height_y):
                     break
-                    
+
                 direction = n % 4
                 axis = n % 2
-                
-                where_to_next = [
-                    (max_width - width_x - INCREASE, height_y, DEFAULT_STEP), # right
-                    (width_x, max_height - height_y - INCREASE, DEFAULT_STEP), # down
-                    (max_width - width_x + INCREASE, height_y, -DEFAULT_STEP), # left
-                    (width_x, max_height - height_y + INCREASE, -DEFAULT_STEP) # up
-                ]
+
+                if reverse:
+                    where_to_next = [
+                        (max_width - width_x - INCREASE, height_y, DEFAULT_STEP),  # right
+                        (width_x, max_height - height_y - INCREASE, DEFAULT_STEP),  # down
+                        (max_width - width_x + INCREASE, height_y, -DEFAULT_STEP),  # left
+                        (width_x, max_height - height_y + INCREASE, -DEFAULT_STEP)  # up
+                    ]
+                else:
+                    where_to_next = [
+                        (width_x + INCREASE + n, height_y, DEFAULT_STEP),  # right
+                        (width_x, height_y + INCREASE + n, DEFAULT_STEP),  # up
+                        (width_x - INCREASE - n, height_y, -DEFAULT_STEP),  # left
+                        (width_x, height_y - INCREASE - n, -DEFAULT_STEP)  # down
+                    ]
 
                 end_x, end_y, defined_step = where_to_next[direction]
-                    
+
                 start_point, stop_point = (width_x, end_x) if (width_x != end_x) else (height_y, end_y)
-                
+
                 for current_position in range(start_point, stop_point, defined_step):
                     position_x, position_y = (current_position, height_y) if (axis == 0) else (width_x, current_position)
-                    
+
                     draw_trace_point(position_x, position_y)
-                        
+
                     if (position_x, position_y) in free_locations:
                         save_trace_img()
                         return position_x, position_y
-                    
+
                 width_x, height_y = end_x, end_y
-                
+
             save_trace_img()
             return None
-        
-            # return rectangular_code(width_x, height_y, reverse=True)
-        
-        def rectangular_code(width_x, height_y, reverse=False):
-            direction = 0
-            width_code, height_code = width_x, height_y
-            max_width = width - size_x
-            max_height = height - size_y
-    
-            for n in range(max(width, height)):
-                draw_trace_point(width_code, height_code)
-                
-                if (width_code, height_code) in free_locations:
-                    save_trace_img()
-                    return width_code, height_code
-        
-                if check_bounds(width_code, height_code):
-                    break
-                    
-                direction = n % 4
-                axis = n % 2
-                
-                where_to = [
-                    (width_x + INCREASE + n, height_y, DEFAULT_STEP), # right
-                    (width_x, height_y + INCREASE + n, DEFAULT_STEP), # up
-                    (width_x - INCREASE - n, height_y, -DEFAULT_STEP), # left
-                    (width_x, height_y - INCREASE - n, -DEFAULT_STEP) # down
-                ]
-                
-                where_to_reverse = [
-                    (max_width - width_x - INCREASE, height_y, DEFAULT_STEP), # right
-                    (width_x, max_height - height_y - INCREASE, DEFAULT_STEP), # down
-                    (max_width - width_x + INCREASE, height_y, -DEFAULT_STEP), # left
-                    (width_x, max_height - height_y + INCREASE, -DEFAULT_STEP) # up
-                ]
-                
-                where_to_next = where_to if not reverse else where_to_reverse
-                
-                end_x, end_y, defined_step = where_to_next[direction]
-                    
-                start_point, stop_point = (width_code, end_x) if (width_code != end_x) else (height_code, end_y)
-                
-                for current_position in range(start_point, stop_point, defined_step):
-                    position_x, position_y = (current_position, height_code) if (axis == 0) else (width_code, current_position)
-                    
-                    draw_trace_point(position_x, position_y)
-                        
-                    if (position_x, position_y) in free_locations:
-                        save_trace_img()
-                        return position_x, position_y
-                    
-                width_code, height_code = end_x, end_y
-                
-            save_trace_img()
-            return None
-        
+
         def archimedian(width_x, height_y):
             e = width/height
              
@@ -299,10 +214,10 @@ class IntegralImage(object):
             return point[0].x, point[0].y
         
         def pytag(width_x, height_y):
-            return pytag_code(width_x, height_y, False)
+            return pytag_code(width_x, height_y, is_reverse=False)
         
         def pytag_reverse(width_x, height_y):
-            return pytag_code(width_x, height_y, True)
+            return pytag_code(width_x, height_y, is_reverse=True)
         
         def pytag_code(width_x, height_y, is_reverse=False):
             #https://github.com/atizo/PyTagCloud
