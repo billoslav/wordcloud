@@ -9,9 +9,13 @@ import math
 import time
 import os
 
+# Define available placement strategies
 STRATEGIES = ["random", "brute", "archimedian", "rectangular", "archimedian_reverse", "rectangular_reverse", "KDTree", "quad", "pytag", "pytag_reverse"]
 
-class IntegralImage(object):
+class IntegralImage:
+    """
+    Represents an integral image for efficient area calculations.
+    """
     def __init__(self, height, width, tracing=False):
         self.height = height
         self.width = width
@@ -19,26 +23,31 @@ class IntegralImage(object):
         self.tracing = tracing
         self.structure_created = False
         self.directory_name = "Tracking"
-        
-        # We are not using any mask, so the initial Image is filled with zeros
-        self.integral = np.zeros((height, width), dtype=np.uint32)
 
-    def find_position(self, size_x, size_y, place_strategy="random", word_to_write = ""):
+        # We are not using any mask, so the initial Image is filled with zeros
+        self.integral = np.zeros((height, width), dtype=np.uint64)
+
+    def find_position(self, size_x, size_y, place_strategy="random", word_to_write=""):
+        """
+        Finds a suitable position for a word using the specified strategy.
+        """
         height = self.height
         width = self.width
-        
+
+        # Calculate initial center position
         height_y = (height - size_y) // 2
         width_x = (width - size_x) // 2
-        
+
         free_locations = []
-        
+
         trace_img = self.tracing
         trace_margin = 200
-        half_trace_margin = trace_margin/2
-        
+        half_trace_margin = trace_margin / 2
+
         INCREASE = 5
         DEFAULT_STEP = 2
-        
+
+        # Setup tracing if enabled
         if trace_img:
             if self.structure_created:
                 tracking_path = f"{self.directory_name}/{place_strategy}/"
@@ -46,90 +55,76 @@ class IntegralImage(object):
                 tracking_path = self.create_tracking_structure(self.directory_name, place_strategy)
                 self.structure_created = True
 
-            tracking_img = Image.new("L", (width+trace_margin, height+trace_margin), color="white")
+            tracking_img = Image.new("L", (width + trace_margin, height + trace_margin), color="white")
             track_draw = ImageDraw.Draw(tracking_img)
-            
-            track_draw.rectangle([(half_trace_margin, half_trace_margin), ((width+half_trace_margin, height+half_trace_margin))], fill=None, outline=None, width=1)
-            track_draw.line([(width+half_trace_margin-size_x, 0), (width+half_trace_margin-size_x, height+trace_margin)], fill="red", width=1, joint=None)
-            track_draw.line([(0, height+half_trace_margin-size_y), (width+trace_margin, height+half_trace_margin-size_y)], fill="red", width=1, joint=None)
+
+            track_draw.rectangle([(half_trace_margin, half_trace_margin), ((width + half_trace_margin, height + half_trace_margin))], fill=None, outline=None, width=1)
+            track_draw.line([(width + half_trace_margin - size_x, 0), (width + half_trace_margin - size_x, height + trace_margin)], fill="red", width=1, joint=None)
+            track_draw.line([(0, height + half_trace_margin - size_y), (width + trace_margin, height + half_trace_margin - size_y)], fill="red", width=1, joint=None)
             trace_img_name = f"{tracking_path}tracing-{word_to_write}-{time.time()}.png"
-    
+
         def is_valid_position(pos_y, pos_x):
+            """Checks if a position is free using the integral image."""
             area = self.integral[pos_y, pos_x] + self.integral[pos_y + size_y, pos_x + size_x]
             area -= self.integral[pos_y + size_y, pos_x] + self.integral[pos_y, pos_x + size_x]
             
             return not area
-        
+
         def check_bounds(x, y):
-            conditions = [
-                x > (width - size_x),
-                y > (height - size_y),
-                y < 0,
-                x < 0
-            ]
-            
-            return sum(conditions) >= 2
-        
+            """Checks if a position is out of bounds."""
+            return sum([x > (width - size_x), y > (height - size_y), y < 0, x < 0]) >= 2
+
         def draw_trace_point(pos_x, pos_y):
-            if trace_img: 
+            """Draws a point on the tracking image."""
+            if trace_img:
                 track_draw.point([(pos_x + half_trace_margin, pos_y + half_trace_margin)], fill="red")
-            
+
         def save_trace_img():
+            """Saves the tracking image."""
             if trace_img:
                 tracking_img.save(trace_img_name)
-        
+
+        # Define placement strategies as inner functions
         def random(width_x, height_y):
             return free_locations[randint(0, len(free_locations) - 1)]
-        
-        def rectangular(width_x, height_y):
-            return rectangular_code(width_x, height_y, reverse=False)
-        
-        def rectangular_reverse(width_x, height_y):
-            return rectangular_code(0, 0, reverse=True)
-        
-        def rectangular_code(width_x, height_y, reverse=False):
+
+        def rectangular_code(width_x, height_y, reverse=False):  # Combined rectangular logic
             max_width = width - size_x if reverse else width
             max_height = height - size_y if reverse else height
-
             direction = 0
 
             for n in range(max(width, height)):
                 draw_trace_point(width_x, height_y)
-
+                
                 if (width_x, height_y) in free_locations:
                     save_trace_img()
                     return width_x, height_y
-
+                
                 if check_bounds(width_x, height_y):
                     break
 
                 direction = n % 4
                 axis = n % 2
 
-                if reverse:
-                    where_to_next = [
-                        (max_width - width_x - INCREASE, height_y, DEFAULT_STEP),  # right
-                        (width_x, max_height - height_y - INCREASE, DEFAULT_STEP),  # down
-                        (max_width - width_x + INCREASE, height_y, -DEFAULT_STEP),  # left
-                        (width_x, max_height - height_y + INCREASE, -DEFAULT_STEP)  # up
-                    ]
-                else:
-                    where_to_next = [
-                        (width_x + INCREASE + n, height_y, DEFAULT_STEP),  # right
-                        (width_x, height_y + INCREASE + n, DEFAULT_STEP),  # up
-                        (width_x - INCREASE - n, height_y, -DEFAULT_STEP),  # left
-                        (width_x, height_y - INCREASE - n, -DEFAULT_STEP)  # down
-                    ]
+                where_to_next = [
+                    (max_width - width_x - INCREASE, height_y, DEFAULT_STEP),  # right
+                    (width_x, max_height - height_y - INCREASE, DEFAULT_STEP),  # down
+                    (max_width - width_x + INCREASE, height_y, -DEFAULT_STEP),  # left
+                    (width_x, max_height - height_y + INCREASE, -DEFAULT_STEP)  # up
+                ] if reverse else [
+                    (width_x + INCREASE + n, height_y, DEFAULT_STEP),  # right
+                    (width_x, height_y + INCREASE + n, DEFAULT_STEP),  # up
+                    (width_x - INCREASE - n, height_y, -DEFAULT_STEP),  # left
+                    (width_x, height_y - INCREASE - n, -DEFAULT_STEP)  # down
+                ]
 
                 end_x, end_y, defined_step = where_to_next[direction]
-
                 start_point, stop_point = (width_x, end_x) if (width_x != end_x) else (height_y, end_y)
 
                 for current_position in range(start_point, stop_point, defined_step):
                     position_x, position_y = (current_position, height_y) if (axis == 0) else (width_x, current_position)
-
                     draw_trace_point(position_x, position_y)
-
+                    
                     if (position_x, position_y) in free_locations:
                         save_trace_img()
                         return position_x, position_y
@@ -139,30 +134,32 @@ class IntegralImage(object):
             save_trace_img()
             return None
 
+        rectangular = lambda width_x, height_y: rectangular_code(width_x, height_y, reverse=False)
+        rectangular_reverse = lambda width_x, height_y: rectangular_code(0, 0, reverse=True)
+
         def archimedian(width_x, height_y):
-            e = width/height
-             
+            e = width / height
             for n in range(height * width):
                 draw_trace_point(width_x, height_y)
-                    
+                
                 if check_bounds(width_x, height_y):
                     break
-                    
+                
                 if (width_x, height_y) in free_locations:
                     save_trace_img()
                     return width_x, height_y
-        
-                width_x = width_x + int(e * (n* .1) * np.cos(n))
-                height_y = height_y + int((n* .1) * np.sin(n))
+
+                width_x = width_x + int(e * (n * .1) * np.cos(n))
+                height_y = height_y + int((n * .1) * np.sin(n))
                 
             save_trace_img()
             return None
-        
+
         def archimedian_reverse(width_x, height_y):
-            spacing=0.5 # Distance between turns of the spiral.
-            density=0.05 # Density of points along the spiral.
-            
-            max_radius = math.sqrt(width_x**2 + height_y**2)
+            spacing = 0.5  # Distance between turns of the spiral.
+            density = 0.05  # Density of points along the spiral.
+
+            max_radius = math.sqrt(width_x ** 2 + height_y ** 2)
 
             # Set up Archimedean spiral parameters
             a = 0  # Start at the center
@@ -170,7 +167,7 @@ class IntegralImage(object):
 
             # Calculate points along the spiral from the outside in
             theta = max_radius / b  # Start from the outer edge
-            
+
             while theta > 0:
                 # Calculate the radius for the current angle
                 r = a + b * theta
@@ -178,9 +175,8 @@ class IntegralImage(object):
                 # Convert polar coordinates to Cartesian coordinates
                 x = int(width_x + r * math.cos(theta))
                 y = int(height_y + r * math.sin(theta))
-                
+
                 draw_trace_point(x, y)
-        
                 if (x, y) in free_locations:
                     save_trace_img()
                     return x, y
@@ -190,22 +186,23 @@ class IntegralImage(object):
 
             save_trace_img()
             return None
-        
+
         def KDTree(width_x, height_y):
-        
+            """Finds a nearby free location using a KDTree."""
             (x, y) = free_locations[spatial.KDTree(free_locations).query([width_x, height_y])[1]]
-        
+
             if (x, y):
                 return x, y
             else: 
                 return None
             
         def quad(width_x, height_y):
+            """Finds a nearby free location using a QuadTree."""
             tree = quads.QuadTree((width_x, height_y), width, height)
-        
+            
             for n in free_locations:
                 tree.insert(n)
-            
+
             point = tree.nearest_neighbors((width_x, height_y), count=1)
                 
             if not point:
@@ -213,41 +210,39 @@ class IntegralImage(object):
         
             return point[0].x, point[0].y
         
-        def pytag(width_x, height_y):
-            return pytag_code(width_x, height_y, is_reverse=False)
-        
-        def pytag_reverse(width_x, height_y):
-            return pytag_code(width_x, height_y, is_reverse=True)
-        
         def pytag_code(width_x, height_y, is_reverse=False):
+            """Implements the PyTag placement strategy."""
             #https://github.com/atizo/PyTagCloud
             directions = [(1, 0), (0, 1), (-1, 0), (0, -1)]
             
-            if is_reverse: 
+            if is_reverse:
                 directions.reverse()
-                
-            direction = directions[0]
 
+            direction = directions[0]
             spl = 1
-            
+
             while spl <= max(height, width):
                 for step in range(spl * 2):
                     if step == spl:
                         direction = directions[(spl - 1) % 4]
-                            
-                    width_x = width_x + direction[0] * DEFAULT_STEP
-                    height_y = height_y + direction[1] * DEFAULT_STEP
+
+                    width_x += direction[0] * DEFAULT_STEP
+                    height_y += direction[1] * DEFAULT_STEP
                     draw_trace_point(width_x, height_y)
-                        
+
                     if (width_x, height_y) in free_locations:
                         save_trace_img()
                         return width_x, height_y
-                        
+
                 spl += 1
-                    
+
             save_trace_img()
             return None
-                    
+
+        pytag = lambda width_x, height_y: pytag_code(width_x, height_y, is_reverse=False)
+        pytag_reverse = lambda width_x, height_y: pytag_code(width_x, height_y, is_reverse=True)
+        
+        # Find all free locations
         for line_y in range(height - size_y):
             for line_x in range(width - size_x):
             
@@ -262,15 +257,19 @@ class IntegralImage(object):
         # If we cannot find any location, return None
         if not free_locations:
             return None
-        
+
+        # Call the selected placement strategy
         if place_strategy not in STRATEGIES:
             raise ValueError(f"Incorrect placing strategy! The '{place_strategy}' is not defined.")
         else:
             return locals()[place_strategy](width_x, height_y)
-                
+
     def update(self, new_img, x, y):
+        """Updates the integral image efficiently."""
+        # Use vectorized operations for faster calculation
         recomputed = np.cumsum(np.cumsum(new_img[y:, x:],axis=1), axis=0)
-        
+
+        # Apply existing integral image values using vectorized operations
         if y > 0:
             if x > 0:
                 recomputed += (self.integral[y - 1, x:] - self.integral[y - 1, x - 1])
@@ -280,27 +279,24 @@ class IntegralImage(object):
             recomputed += self.integral[y:, x - 1][:, np.newaxis]
 
         self.integral[y:, x:] = recomputed
-        
+
     def create_folder(self, folder_name, parent_name=""):
-        structure = f"{parent_name}/{folder_name}" if parent_name else folder_name
-        if not os.path.isdir(structure):
-            try:
-                os.mkdir(structure)
-                print(f"Directory '{structure}' created successfully.")
-            except FileExistsError:
-                print(f"Directory '{structure}' already exists.")
-            except PermissionError:
-                print(f"Permission denied: Unable to create '{structure}'.")
-            except Exception as e:
-                print(f"An error occurred: {e}")
-    
+        """Creates a directory if it doesn't exist, handling potential errors."""
+        path = os.path.join(parent_name, folder_name) if parent_name else folder_name  # Use os.path.join
+        try:
+            os.makedirs(path, exist_ok=True)  # Use makedirs and exist_ok for cleaner creation
+            print(f"Directory '{path}' created/already exists.")  # Informative message
+        except OSError as e:  # Catch potential OS errors
+            print(f"Error creating directory '{path}': {e}")
+
     def create_tracking_structure(self, directory, place_strategy):
+        """Creates the tracking directory structure."""
         self.create_folder(directory)
         self.create_folder(place_strategy, directory)
         
         return f"{directory}/{place_strategy}/"
 
-class Wordcloud(object):
+class Wordcloud:
     def __init__(self, width=600, height=338, font_path=None, margin=2,
                  max_words=200, min_word_length=3,
                  min_font_size=14, max_font_size=None, font_step=2,
@@ -328,15 +324,14 @@ class Wordcloud(object):
         self.tracing_files = tracing_files
         
         self.def_max_font_size = 60
-    
+
     def split_text(self, text_to_split, stopwords=None, min_word_length=None):
-        splitted = text_to_split.split()
-        res = {}
-        
+        """Splits and preprocesses text, counting word frequencies."""
         self.stopwords = stopwords if stopwords is not None else self.stopwords
         self.min_word_length = min_word_length if min_word_length is not None else self.min_word_length
-            
-        for word in splitted:
+
+        res = {}
+        for word in text_to_split.split():
             word = ''.join([i for i in word if i.isalpha()])
         
             if len(word) < self.min_word_length: word = ''
@@ -347,16 +342,14 @@ class Wordcloud(object):
         return res 
     
     def sort_normalize(self, input_words):
+        """Sorts word frequencies and normalizes them."""
+        if not input_words:  # Check for empty input
+            raise ValueError("No words to process.")
+
         frequencies = sorted(input_words.items(), key=itemgetter(1), reverse=True)
-        
-        if len(frequencies) <= 0:
-            raise ValueError(f"We need at least 1 word, but got: '{len(frequencies)}'")
-    
         max_frequency = float(frequencies[0][1])
-        frequencies = [(word, freq / max_frequency, freq) for word, freq in frequencies]
-    
-        return frequencies
-    
+        return [(word, freq / max_frequency, freq) for word, freq in frequencies]
+
     def prepare_text(self, to_split, stopwords=None, min_word_length=None):
         splitted = self.split_text(to_split, stopwords, min_word_length)
         
@@ -583,17 +576,17 @@ class Wordcloud(object):
         plt.show()
 
         return self
-        
+
     def generate_svg(self, save_file=False, file_name="svg_img"):
-        
+        """Generates SVG content for the wordcloud."""
+
         height = self.height
         width = self.width
-        max_font_size = self.max_font_size
 
         result = []
 
         # Get font information
-        font = ImageFont.truetype(self.font_path, max_font_size)
+        font = ImageFont.truetype(self.font_path, self.max_font_size or self.def_max_font_size)
         raw_font_family, raw_font_style = font.getname()
         
         font_family = repr(raw_font_family)
@@ -607,7 +600,7 @@ class Wordcloud(object):
         result.append(f"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\">")
 
         # Style
-        result.append(f"<style>text{{font-family:{font_family};font-weight:{font_weight};font-style:{font_style};}}</style>")
+        result.append(f"<style>text{{font-family:{font_family}, sans-serif; font-weight:{font_weight}; font-style:{font_style};}}</style>")
 
         # Background if defined
         if self.background_color is not None:
@@ -618,24 +611,28 @@ class Wordcloud(object):
             font = ImageFont.truetype(font_path, font_size)
             bbox = font.getbbox(word)
             ascent, descent = font.getmetrics()
-        
+
             x = x - bbox[0]
             y = y + (ascent - bbox[1])
 
             # Create text element
             result.append(f"<text id=\"{word}\" transform=\"translate({x},{y})\" font-size=\"{font_size}\" style=\"fill:{color}\" count=\"{count}\">{word}</text>")
-               
+
         result.append('</svg>')
-        
+
+        svg_content = '\n'.join(result)
+
         if save_file:
-            to_save = open(f"{file_name}.html", "a")
-            to_save.write('\n'.join(result))
-            to_save.close()
-            
-        return '\n'.join(result)
-    
+            try:
+                with open(f"{file_name}.svg", "w", encoding="utf-8") as f: # Specify encoding
+                    f.write(svg_content)
+            except OSError as e:
+                print(f"Error saving SVG: {e}")
+
+        return svg_content
+
     def create_html(self, svg_content, save_file=False, file_name="wordcloud"):
-        
+        """Creates an HTML file with the SVG content and tooltip functionality."""
         html_file = []
         
         #HTML file structure and basic styles
