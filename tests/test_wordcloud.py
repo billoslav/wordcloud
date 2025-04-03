@@ -1009,14 +1009,6 @@ class TestIntegralImage(unittest.TestCase):
         self.assertTrue(0 <= x <= self.integral_image.width)
         self.assertTrue(0 <= y <= self.integral_image.height)
 
-
-
-
-
-
-
-
-
     def test_pytag_code_basic(self):
         size_x = 20
         size_y = 30
@@ -1186,6 +1178,249 @@ class TestIntegralImage(unittest.TestCase):
         self.assertEqual(path, expected_path)
         os.rmdir(expected_path)
         os.rmdir(directory)
+
+    def test_tracing_setup(self):
+        """Test the tracing_setup method with new tracking structure"""
+        # Create a tracing-enabled integral image
+        integral_image = IntegralImage(100, 150, tracing=True)
+        integral_image.directory_name = "Tracing_test"
+        
+        # Call tracing_setup for the first time (should create new structure)
+        integral_image.structure_created = False
+        integral_image.tracing_setup(10, 20, "test_strategy", "test_word")
+        
+        # Check if the structure was created
+        self.assertTrue(integral_image.structure_created)
+        self.assertTrue(os.path.exists("Tracing_test/test_strategy"))
+        
+        # Check if the tracking image was created with correct dimensions
+        self.assertEqual(integral_image.tracking_img.size, (integral_image.width + integral_image.trace_margin, 
+                                                            integral_image.height + integral_image.trace_margin))
+        
+        # Check if trace_img_name was correctly set
+        self.assertTrue("Tracing_test/test_strategy/tracing-test_word" in integral_image.trace_img_name)
+        
+        # Cleanup - handle potential errors
+        try:
+            # First remove any files that might have been created
+            if os.path.exists(integral_image.trace_img_name):
+                os.remove(integral_image.trace_img_name)
+            
+            # Remove the directories
+            if os.path.exists("Tracing_test/test_strategy"):
+                # List all files and remove them first
+                for file in os.listdir("Tracing_test/test_strategy"):
+                    file_path = os.path.join("Tracing_test/test_strategy", file)
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                os.rmdir("Tracing_test/test_strategy")
+            
+            if os.path.exists("Tracing_test"):
+                # List all subdirectories and remove them first
+                for dir_name in os.listdir("Tracing_test"):
+                    dir_path = os.path.join("Tracing_test", dir_name)
+                    if os.path.isdir(dir_path):
+                        # Remove any files in the directory
+                        for file in os.listdir(dir_path):
+                            file_path = os.path.join(dir_path, file)
+                            if os.path.isfile(file_path):
+                                os.remove(file_path)
+                        os.rmdir(dir_path)
+                os.rmdir("Tracing_test")
+        except OSError:
+            pass  # Ignore cleanup errors
+        
+    def test_tracing_setup_existing_structure(self):
+        """Test tracing_setup method with an existing structure"""
+        # Create a tracing-enabled integral image
+        integral_image = IntegralImage(100, 150, tracing=True)
+        integral_image.directory_name = "Tracing_test"
+        
+        # Create the directory structure manually
+        if not os.path.exists("Tracing_test"):
+            os.makedirs("Tracing_test")
+        if not os.path.exists("Tracing_test/test_strategy"):
+            os.makedirs("Tracing_test/test_strategy")
+        
+        # Call tracing_setup with existing structure
+        integral_image.structure_created = True
+        integral_image.tracing_setup(10, 20, "test_strategy", "test_word2")
+        
+        # Check if tracking image and draw object were created
+        self.assertIsNotNone(integral_image.tracking_img)
+        self.assertIsNotNone(integral_image.track_draw)
+        
+        # Check if trace_img_name contains the right path and word
+        expected_path = "Tracing_test/test_strategy/tracing-test_word2"
+        self.assertTrue(expected_path in integral_image.trace_img_name)
+        
+        # Cleanup - handle potential errors
+        try:
+            # First remove any files that might have been created
+            if os.path.exists(integral_image.trace_img_name):
+                os.remove(integral_image.trace_img_name)
+            
+            # Remove the directories
+            if os.path.exists("Tracing_test/test_strategy"):
+                # List all files and remove them first
+                for file in os.listdir("Tracing_test/test_strategy"):
+                    file_path = os.path.join("Tracing_test/test_strategy", file)
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                os.rmdir("Tracing_test/test_strategy")
+            
+            if os.path.exists("Tracing_test"):
+                # List all subdirectories and remove them first
+                for dir_name in os.listdir("Tracing_test"):
+                    dir_path = os.path.join("Tracing_test", dir_name)
+                    if os.path.isdir(dir_path):
+                        # Remove any files in the directory
+                        for file in os.listdir(dir_path):
+                            file_path = os.path.join(dir_path, file)
+                            if os.path.isfile(file_path):
+                                os.remove(file_path)
+                        os.rmdir(dir_path)
+                os.rmdir("Tracing_test")
+        except OSError:
+            pass  # Ignore cleanup errors
+    
+    def test_save_trace_img(self):
+        """Test the save_trace_img method"""
+        # Create a tracing-enabled integral image
+        integral_image = IntegralImage(100, 150, tracing=True)
+        integral_image.directory_name = "Tracing_test"
+        
+        # Setup tracing environment
+        integral_image.tracing_setup(10, 20, "test_save_img", "test_word")
+        
+        # Save the trace image
+        integral_image.save_trace_img()
+        
+        # Check if file was created
+        self.assertTrue(os.path.exists(integral_image.trace_img_name))
+        
+        # Cleanup - handle potential errors
+        try:
+            # First remove any files that might have been created
+            if os.path.exists(integral_image.trace_img_name):
+                os.remove(integral_image.trace_img_name)
+            
+            # Remove the directories
+            if os.path.exists("Tracing_test/test_save_img"):
+                # List all files and remove them first
+                for file in os.listdir("Tracing_test/test_save_img"):
+                    file_path = os.path.join("Tracing_test/test_save_img", file)
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                os.rmdir("Tracing_test/test_save_img")
+            
+            if os.path.exists("Tracing_test"):
+                # List all subdirectories and remove them first
+                for dir_name in os.listdir("Tracing_test"):
+                    dir_path = os.path.join("Tracing_test", dir_name)
+                    if os.path.isdir(dir_path):
+                        # Remove any files in the directory
+                        for file in os.listdir(dir_path):
+                            file_path = os.path.join(dir_path, file)
+                            if os.path.isfile(file_path):
+                                os.remove(file_path)
+                        os.rmdir(dir_path)
+                os.rmdir("Tracing_test")
+        except OSError:
+            pass  # Ignore cleanup errors
+
+    def test_draw_trace_point(self):
+        """Test the draw_trace_point method"""
+        # Create a tracing-enabled integral image
+        integral_image = IntegralImage(100, 150, tracing=True)
+        integral_image.directory_name = "Tracing_test"
+        
+        # Setup tracing environment
+        integral_image.tracing_setup(10, 20, "test_trace_point", "test_word")
+        
+        # Draw a trace point
+        test_x, test_y = 25, 30
+        integral_image.draw_trace_point(test_x, test_y)
+        
+        # The exact color value can vary based on implementation
+        # For "red" in L mode (grayscale), it could be any gray value
+        # So we'll just check if the pixel has been modified from white (255)
+        expected_point = (test_x + integral_image.half_trace_margin, 
+                          test_y + integral_image.half_trace_margin)
+        pixel_value = integral_image.tracking_img.getpixel(expected_point)
+        self.assertNotEqual(pixel_value, 255)  # Should be modified from white
+        
+        # Cleanup - remove directories if they exist
+        try:
+            if os.path.exists(integral_image.trace_img_name):
+                os.remove(integral_image.trace_img_name)
+            if os.path.exists("Tracing_test/test_trace_point"):
+                os.rmdir("Tracing_test/test_trace_point")
+            if os.path.exists("Tracing_test"):
+                os.rmdir("Tracing_test")
+        except OSError:
+            pass  # Ignore cleanup errors
+
+    def test_save_trace_img(self):
+        """Test the save_trace_img method"""
+        # Create a tracing-enabled integral image
+        integral_image = IntegralImage(100, 150, tracing=True)
+        integral_image.directory_name = "Tracing_test"
+        
+        # Setup tracing environment
+        integral_image.tracing_setup(10, 20, "test_save_img", "test_word")
+        
+        # Save the trace image
+        integral_image.save_trace_img()
+        
+        # Check if file was created
+        self.assertTrue(os.path.exists(integral_image.trace_img_name))
+        
+        # Cleanup - handle potential errors
+        try:
+            # First remove any files that might have been created
+            if os.path.exists(integral_image.trace_img_name):
+                os.remove(integral_image.trace_img_name)
+            
+            # Remove the directories
+            if os.path.exists("Tracing_test/test_save_img"):
+                # List all files and remove them first
+                for file in os.listdir("Tracing_test/test_save_img"):
+                    file_path = os.path.join("Tracing_test/test_save_img", file)
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                os.rmdir("Tracing_test/test_save_img")
+            
+            if os.path.exists("Tracing_test"):
+                # List all subdirectories and remove them first
+                for dir_name in os.listdir("Tracing_test"):
+                    dir_path = os.path.join("Tracing_test", dir_name)
+                    if os.path.isdir(dir_path):
+                        # Remove any files in the directory
+                        for file in os.listdir(dir_path):
+                            file_path = os.path.join(dir_path, file)
+                            if os.path.isfile(file_path):
+                                os.remove(file_path)
+                        os.rmdir(dir_path)
+                os.rmdir("Tracing_test")
+        except OSError:
+            pass  # Ignore cleanup errors
+    
+    def test_draw_trace_point_no_tracing(self):
+        """Test draw_trace_point with tracing disabled"""
+        # Create an integral image with tracing disabled
+        integral_image = IntegralImage(100, 150, tracing=False)
+        
+        # Drawing a point should not raise an error even without tracing setup
+        integral_image.draw_trace_point(25, 30)
+        
+    def test_save_trace_img_no_tracing(self):
+        """Test save_trace_img with tracing disabled"""
+        # Create an integral image with tracing disabled
+        integral_image = IntegralImage(100, 150, tracing=False)
+        
+        # Saving should not raise an error even without tracing setup
+        integral_image.save_trace_img()
 
 class TestWordcloud(unittest.TestCase):
 
