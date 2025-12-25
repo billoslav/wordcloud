@@ -823,6 +823,32 @@ class TestIntegralImage(unittest.TestCase):
         result = self.integral_image.rectangular_reverse(self.rectangular_no_locations, width_x, height_y, size_x, size_y)
         self.assertIsNone(result)
 
+    def test_rectangular_reverse_stops_at_center(self):
+        """Regression test for rectangular_reverse expansion bug."""
+        height = 100
+        width = 100
+        size_x = 10
+        size_y = 10
+        ii = IntegralImage(height, width)
+        
+        # Mock set to track points
+        checked_points = []
+        class MockSet(set):
+            def __contains__(self, item):
+                checked_points.append(item)
+                return False
+        
+        ii.rectangular_reverse(MockSet(), 0, 0, size_x, size_y)
+        
+        # Center should be (45, 45) for 100x100 and size 10x10
+        center = (45, 45)
+        self.assertIn(center, checked_points)
+        
+        center_index = checked_points.index(center)
+        # It should stop at or very shortly after center
+        points_after_center = len(checked_points) - 1 - center_index
+        self.assertLessEqual(points_after_center, 5, f"Too many points checked after center: {points_after_center}")
+
     def test_archimedian_basic(self):
         size_x = 20
         size_y = 30
@@ -2165,7 +2191,7 @@ class TestWordcloud(unittest.TestCase):
         
         self.wc.create_html(svg_content, save_file=True)
         mock_create_folder.assert_called_once()
-        mock_file.assert_called_once_with(f"{self.wc.results_folder}/wordcloud.html", "a")
+        mock_file.assert_called_once_with(f"{self.wc.results_folder}/wordcloud.html", "w", encoding="utf-8")
 
         html_content = self.wc.create_html(svg_content)
         self.assertIsInstance(html_content, str)
@@ -2177,7 +2203,7 @@ class TestWordcloud(unittest.TestCase):
         svg_content = "<svg>test svg</svg>"
         html_content = self.wc.create_html(svg_content, save_file=True, file_name="test_wordcloud")
         mock_create_folder.assert_called_once()
-        mock_file.assert_called_once_with(f"{self.wc.results_folder}/test_wordcloud.html", "a")
+        mock_file.assert_called_once_with(f"{self.wc.results_folder}/test_wordcloud.html", "w", encoding="utf-8")
         self.assertIsInstance(html_content, str)
         self.assertTrue("<html" in html_content)  # Basic check for HTML tag
         self.assertTrue(svg_content in html_content)
