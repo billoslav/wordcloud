@@ -1,615 +1,26 @@
+import re
+import os
+import random
 import numpy as np
+from collections import Counter
 from random import randint
 from operator import itemgetter
 from PIL import Image, ImageFont, ImageDraw
 import matplotlib.pyplot as plt
-import os
-import numpy as np
-from random import randint
-from PIL import Image, ImageDraw
-from scipy import spatial
-import quads
-import math
-import time
-import os
+import logging
+from typing import Optional, Callable
 
-# Define available placement strategies
-STRATEGIES = ["random", "brute", "archimedian", "rectangular", "archimedian_reverse", "rectangular_reverse", "KDTree", "quad", "pytag", "pytag_reverse"]
-
-class IntegralImage:
-    """
-    Implements an integral image for efficient word placement and collision detection.
-    
-    The integral image is a data structure that allows for fast area sum calculations,
-    which is essential for determining if a region is available for placing a word.
-    It also implements various placement strategies for positioning words in the wordcloud.
-    
-    Attributes:
-        height (int): Height of the integral image in pixels
-        width (int): Width of the integral image in pixels
-        integral (numpy.ndarray): 2D array representing the integral image
-        tracing (bool): Whether to generate tracing images for debugging
-        trace_margin (int): Margin size for tracing images
-        half_trace_margin (float): Half of the trace margin for calculations
-        structure_created (bool): Flag indicating if the tracing directory structure exists
-        directory_name (str): Directory for storing tracing images
-        INCREASE (int): Step size increment for spiral strategies
-        DEFAULT_STEP (int): Default step size for movement in placement strategies
-    """
-    def __init__(self, height, width, tracing=False):
-        """
-        Initialize an IntegralImage instance.
-        
-        Args:
-            height (int): Height of the integral image in pixels
-            width (int): Width of the integral image in pixels
-            tracing (bool, optional): Whether to generate tracing images for debugging.
-                Defaults to False.
-        """
-        self.height = height
-        self.width = width
-        
-        self.INCREASE = 5
-        self.DEFAULT_STEP = 2
-        
-        self.tracing = tracing
-        self.trace_margin = 200
-        self.half_trace_margin = self.trace_margin / 2
-        self.structure_created = False
-        self.directory_name = os.getcwd() + "/Tracking"
-
-        # We are not using any mask, so the initial Image is filled with zeros
-        self.integral = np.zeros((height, width), dtype=np.uint64)
-                
-    def find_position(self, size_x, size_y, place_strategy="random", word_to_write=""):
-        """
-        Find a suitable position for a word using the specified strategy.
-        
-        This method searches for an available space in the integral image where a word
-        with the given dimensions can be placed without overlapping existing words.
-        
-        Args:
-            size_x (int): Width of the word's bounding box
-            size_y (int): Height of the word's bounding box
-            place_strategy (str, optional): Strategy to use for word placement.
-                Must be one of the strategies defined in STRATEGIES.
-                Defaults to "random".
-            word_to_write (str, optional): The word being placed, used for tracing.
-                Defaults to empty string.
-                
-        Returns:
-            tuple or None: (x, y) coordinates for the word position if found, None otherwise
-            
-        Raises:
-            ValueError: If size_x or size_y is negative, or if place_strategy is invalid
-        """
-        if size_y < 0 or size_x < 0:
-            raise ValueError("Negative size of the image!")
-        
-        height = self.height
-        width = self.width
-
-        # Calculate initial center position
-        height_y = (height - size_y) // 2
-        width_x = (width - size_x) // 2
-
-        free_locations = []
-
-        # Setup tracing if enabled
-        if self.tracing: self.tracing_setup(size_x, size_y, place_strategy, word_to_write)
-
-        # Find all free locations
-        for line_y in range(height - size_y):
-            for line_x in range(width - size_x):
-            
-                if self.is_valid_position(line_y, line_x, size_y, size_x):
-                    
-                    # If we check Brute force here, it gets aprox. 40% faster
-                    if place_strategy == "brute":
-                        return (line_x, line_y)
-                    
-                    free_locations.append((line_x, line_y))
-
-        # If we cannot find any location, return None
-        if not free_locations:
-            return None
-
-        # Call the selected placement strategy
-        if place_strategy not in STRATEGIES:
-            raise ValueError(f"Incorrect placing strategy! The '{place_strategy}' is not defined.")
-        else:
-            method_to_call = getattr(self, place_strategy)
-            return method_to_call(free_locations, width_x, height_y, size_x, size_y)
-
-    def is_valid_position(self, pos_y, pos_x, size_y, size_x):
-        """
-        Check if a position is available for placing a word.
-        
-        Uses the integral image to efficiently determine if the rectangular area
-        at the given position is empty (contains no other words).
-        
-        Args:
-            pos_y (int): Y-coordinate of top-left corner
-            pos_x (int): X-coordinate of top-left corner
-            size_y (int): Height of the area to check
-            size_x (int): Width of the area to check
-            
-        Returns:
-            bool: True if the position is valid (empty), False otherwise
-            
-        Raises:
-            ValueError: If any coordinate or size is negative
-        """
-        if pos_y < 0 or pos_x < 0 or size_y < 0 or size_x < 0:
-            raise ValueError("Negative size or coordinates of the image!")
-        
-        area = self.integral[pos_y, pos_x] + self.integral[pos_y + size_y, pos_x + size_x]
-        area -= self.integral[pos_y + size_y, pos_x] + self.integral[pos_y, pos_x + size_x]
-            
-        return not area
-        
-    def check_bounds(self, x, y, size_x, size_y):
-        """
-        Check if a position is out of bounds or requires special handling.
-        
-        This method is used by the placement strategies to determine if a position
-        is completely outside the valid area or if it requires special handling.
-        
-        Args:
-            x (int): X-coordinate to check
-            y (int): Y-coordinate to check
-            size_x (int): Width of the area
-            size_y (int): Height of the area
-            
-        Returns:
-            bool: True if position requires special handling (multiple edges violated),
-                 False if the position is within bounds or only one edge is violated
-        """
-        return sum([x > (self.width - size_x), y > (self.height - size_y), y < 0, x < 0]) >= 2
-        
-    def draw_trace_point(self, pos_x, pos_y):
-        """
-        Draw a point on the tracking image for visualization.
-        
-        Used during debugging to visualize the path taken by placement strategies.
-        Only has an effect if tracing is enabled.
-        
-        Args:
-            pos_x (int): X-coordinate of the point to draw
-            pos_y (int): Y-coordinate of the point to draw
-        """
-        if self.tracing:
-            self.track_draw.point([(pos_x + self.half_trace_margin, pos_y + self.half_trace_margin)], fill="red")
-
-    def save_trace_img(self):
-        """
-        Save the current tracking image to disk.
-        
-        Only has an effect if tracing is enabled. The image shows the path
-        taken by the placement strategy when finding a position for a word.
-        """
-        if self.tracing:
-            self.tracking_img.save(self.trace_img_name)
-    
-    # Define placement strategies as inner functions
-    def random(self, free_locations, width_x, height_y, size_x, size_y):
-        """
-        Random placement strategy - selects a random position from available locations.
-        
-        This is the simplest placement strategy, offering good performance but less
-        visually appealing arrangements compared to other strategies.
-        
-        Args:
-            free_locations (list): List of available (x, y) coordinate tuples
-            width_x (int): X-coordinate of the center point (used by other strategies)
-            height_y (int): Y-coordinate of the center point (used by other strategies)
-            size_x (int): Width of the word bounding box (used by other strategies)
-            size_y (int): Height of the word bounding box (used by other strategies)
-            
-        Returns:
-            tuple: Selected (x, y) position for word placement
-        """
-        return free_locations[randint(0, len(free_locations) - 1)]
-
-    def rectangular_code(self, free_locations, width_x, height_y, size_x, size_y, reverse=False):
-        """
-        Implementation of rectangular spiral placement strategy.
-        
-        This algorithm tries to place words in a rectangular spiral pattern,
-        either from the center outward (forward) or from the outside inward (reverse).
-        
-        Args:
-            free_locations (list): List of available (x, y) coordinate tuples
-            width_x (int): Initial X-coordinate for spiral center
-            height_y (int): Initial Y-coordinate for spiral center
-            size_x (int): Width of the word bounding box
-            size_y (int): Height of the word bounding box
-            reverse (bool, optional): If True, use reverse spiral (outside-in).
-                Defaults to False (inside-out).
-                
-        Returns:
-            tuple or None: Selected (x, y) position for word placement, or None if no position found
-        """
-        max_width = self.width - size_x if reverse else self.width
-        max_height = self.height - size_y if reverse else self.height
-        direction = 0
-
-        for n in range(max(self.width, self.height)):
-            self.draw_trace_point(width_x, height_y)
-                
-            if (width_x, height_y) in free_locations:
-                self.save_trace_img()
-                return width_x, height_y
-                
-            if self.check_bounds(width_x, height_y, size_x, size_y):
-                break
-
-            direction = n % 4
-            axis = n % 2
-
-            where_to_next = [
-                (max_width - width_x - self.INCREASE, height_y, self.DEFAULT_STEP),  # right
-                (width_x, max_height - height_y - self.INCREASE, self.DEFAULT_STEP),  # down
-                (max_width - width_x + self.INCREASE, height_y, -self.DEFAULT_STEP),  # left
-                (width_x, max_height - height_y + self.INCREASE, -self.DEFAULT_STEP)  # up
-            ] if reverse else [
-                (width_x + self.INCREASE + n, height_y, self.DEFAULT_STEP),  # right
-                (width_x, height_y + self.INCREASE + n, self.DEFAULT_STEP),  # up
-                (width_x - self.INCREASE - n, height_y, -self.DEFAULT_STEP),  # left
-                (width_x, height_y - self.INCREASE - n, -self.DEFAULT_STEP)  # down
-            ]
-
-            end_x, end_y, defined_step = where_to_next[direction]
-            start_point, stop_point = (width_x, end_x) if (width_x != end_x) else (height_y, end_y)
-
-            for current_position in range(start_point, stop_point, defined_step):
-                position_x, position_y = (current_position, height_y) if (axis == 0) else (width_x, current_position)
-                self.draw_trace_point(position_x, position_y)
-                
-                if (position_x, position_y) in free_locations:
-                    self.save_trace_img()
-                    return position_x, position_y
-
-            width_x, height_y = end_x, end_y
-
-        self.save_trace_img()
-        return None
-
-    rectangular = lambda self, free_locations, width_x, height_y, size_x, size_y: self.rectangular_code(free_locations, width_x, height_y, size_x, size_y, reverse=False)
-    """Forward rectangular spiral placement strategy (center outward).
-    
-    A convenience lambda function that calls rectangular_code with reverse=False.
-    See rectangular_code for detailed documentation.
-    """
-    
-    rectangular_reverse = lambda self, free_locations, width_x, height_y, size_x, size_y: self.rectangular_code(free_locations, 0, 0, size_x, size_y, reverse=True)
-    """Reverse rectangular spiral placement strategy (outside inward).
-    
-    A convenience lambda function that calls rectangular_code with reverse=True.
-    See rectangular_code for detailed documentation.
-    """
-
-    def archimedian(self, free_locations, width_x, height_y, size_x, size_y):
-        """
-        Archimedean spiral placement strategy (center outward).
-        
-        This algorithm tries to place words along an Archimedean spiral pattern
-        starting from the center and spiraling outward. Creates a more naturally
-        curved arrangement compared to rectangular spirals.
-        
-        Args:
-            free_locations (list): List of available (x, y) coordinate tuples
-            width_x (int): X-coordinate of spiral center
-            height_y (int): Y-coordinate of spiral center
-            size_x (int): Width of the word bounding box
-            size_y (int): Height of the word bounding box
-            
-        Returns:
-            tuple or None: Selected (x, y) position for word placement, or None if no position found
-        """
-        e = self.width / self.height
-        for n in range(self.height * self.width):
-            self.draw_trace_point(width_x, height_y)
-            
-            if self.check_bounds(width_x, height_y, size_x, size_y):
-                break
-                
-            if (width_x, height_y) in free_locations:
-                self.save_trace_img()
-                return width_x, height_y
-
-            width_x = width_x + int(e * (n * .1) * np.cos(n))
-            height_y = height_y + int((n * .1) * np.sin(n))
-                
-        self.save_trace_img()
-        return None
-
-    def archimedian_reverse(self, free_locations, width_x, height_y, size_x, size_y):
-        """
-        Reverse Archimedean spiral placement strategy (outside inward).
-        
-        This algorithm tries to place words along an Archimedean spiral pattern
-        starting from the outside and spiraling inward. Creates a more naturally
-        curved arrangement compared to rectangular spirals.
-        
-        Args:
-            free_locations (list): List of available (x, y) coordinate tuples
-            width_x (int): Width of the wordcloud (used for calculations)
-            height_y (int): Height of the wordcloud (used for calculations)
-            size_x (int): Width of the word bounding box
-            size_y (int): Height of the word bounding box
-            
-        Returns:
-            tuple or None: Selected (x, y) position for word placement, or None if no position found
-        """
-        spacing = 0.5  # Distance between turns of the spiral.
-        density = 0.05  # Density of points along the spiral.
-
-        max_radius = math.sqrt(width_x ** 2 + height_y ** 2)
-
-        # Set up Archimedean spiral parameters
-        a = 0  # Start at the center
-        b = spacing  # Determines the spacing of each spiral turn
-
-        # Calculate points along the spiral from the outside in
-        theta = max_radius / b  # Start from the outer edge
-
-        while theta > 0:
-            # Calculate the radius for the current angle
-            r = a + b * theta
-
-            # Convert polar coordinates to Cartesian coordinates
-            x = int(width_x + r * math.cos(theta))
-            y = int(height_y + r * math.sin(theta))
-
-            self.draw_trace_point(x, y)
-            if (x, y) in free_locations:
-                self.save_trace_img()
-                return x, y
-
-            # Decrease theta to move inward along the spiral
-            theta -= density
-
-        self.save_trace_img()
-        return None
-
-    def KDTree(self, free_locations, width_x, height_y, size_x, size_y):
-        """
-        K-D Tree placement strategy for finding the nearest available position.
-        
-        Uses a K-D Tree spatial data structure to efficiently find the position
-        closest to the center point. This strategy is typically faster than
-        spiral strategies while providing visually pleasing results.
-        
-        Args:
-            free_locations (list): List of available (x, y) coordinate tuples
-            width_x (int): X-coordinate of target point (usually center)
-            height_y (int): Y-coordinate of target point (usually center)
-            size_x (int): Width of the word bounding box (not used in this strategy)
-            size_y (int): Height of the word bounding box (not used in this strategy)
-            
-        Returns:
-            tuple or None: Selected (x, y) position for word placement, or None if no positions available
-        """
-        if not free_locations: return None
-        
-        (x, y) = free_locations[spatial.KDTree(free_locations).query([width_x, height_y])[1]]
-
-        if (x, y):
-            return x, y
-        else: 
-            return None
-            
-    def quad(self, free_locations, width_x, height_y, size_x, size_y):
-        """
-        Quad Tree placement strategy for finding the nearest available position.
-        
-        Uses a Quad Tree spatial data structure to efficiently find the position
-        closest to the center point. Similar to KDTree but with a different
-        spatial partitioning approach.
-        
-        Args:
-            free_locations (list): List of available (x, y) coordinate tuples
-            width_x (int): X-coordinate of target point (usually center)
-            height_y (int): Y-coordinate of target point (usually center)
-            size_x (int): Width of the word bounding box (not used in this strategy)
-            size_y (int): Height of the word bounding box (not used in this strategy)
-            
-        Returns:
-            tuple or None: Selected (x, y) position for word placement, or None if no positions available
-        """
-        if not free_locations: return None
-        
-        tree = quads.QuadTree((width_x, height_y), self.width, self.height)
-            
-        for n in free_locations:
-            tree.insert(n)
-
-        point = tree.nearest_neighbors((width_x, height_y), count=1)
-                
-        if not point:
-            return None
-        
-        return point[0].x, point[0].y
-        
-    def pytag_code(self, free_locations, width_x, height_y, size_x, size_y, is_reverse=False):
-        """
-        PyTagCloud-inspired spiral placement strategy.
-        
-        Based on the placement strategy from the PyTagCloud project, this algorithm
-        creates a spiral pattern that can run in either direction.
-        
-        Args:
-            free_locations (list): List of available (x, y) coordinate tuples
-            width_x (int): X-coordinate of spiral center
-            height_y (int): Y-coordinate of spiral center
-            size_x (int): Width of the word bounding box
-            size_y (int): Height of the word bounding box
-            is_reverse (bool, optional): Whether to reverse the spiral direction.
-                Defaults to False.
-                
-        Returns:
-            tuple or None: Selected (x, y) position for word placement, or None if no position found
-            
-        References:
-            https://github.com/atizo/PyTagCloud
-        """
-        directions = [(1, 0), (0, 1), (-1, 0), (0, -1)]
-            
-        if is_reverse:
-            directions.reverse()
-
-        direction = directions[0]
-        spl = 1
-
-        while spl <= max(self.height, self.width):
-            for step in range(spl * 2):
-                if step == spl:
-                    direction = directions[(spl - 1) % 4]
-
-                width_x += direction[0] * self.DEFAULT_STEP
-                height_y += direction[1] * self.DEFAULT_STEP
-                self.draw_trace_point(width_x, height_y)
-
-                if (width_x, height_y) in free_locations:
-                    self.save_trace_img()
-                    return width_x, height_y
-
-            spl += 1
-
-        self.save_trace_img()
-        return None
-
-    pytag = lambda self, free_locations, width_x, height_y, size_x, size_y: self.pytag_code(free_locations, width_x, height_y, size_x, size_y, is_reverse=False)
-    """Forward PyTagCloud spiral placement strategy.
-    
-    A convenience lambda function that calls pytag_code with is_reverse=False.
-    See pytag_code for detailed documentation.
-    """
-    
-    pytag_reverse = lambda self, free_locations, width_x, height_y, size_x, size_y: self.pytag_code(free_locations, width_x, height_y, size_x, size_y, is_reverse=True)
-    """Reverse PyTagCloud spiral placement strategy.
-    
-    A convenience lambda function that calls pytag_code with is_reverse=True.
-    See pytag_code for detailed documentation.
-    """
-                
-    #TODO - check Image size matching the origin size
-    def update(self, new_img, x, y):
-        """
-        Update the integral image with a new image at the specified position.
-        
-        This method efficiently updates the integral image by calculating the
-        cumulative sum for the new image section and incorporating it into
-        the existing integral image.
-        
-        Args:
-            new_img (numpy.ndarray): Image array to add to the integral image
-            x (int): X-coordinate where to place the top-left corner of new_img
-            y (int): Y-coordinate where to place the top-left corner of new_img
-            
-        Raises:
-            ValueError: If x or y is negative
-            
-        Notes:
-            - If the new image exceeds the boundaries of the integral image,
-              it will be cropped to fit.
-            - This method assumes new_img is a 2D numpy array (grayscale image).
-              Color images will raise a ValueError.
-        """
-        if (x or y) < 0:
-            raise ValueError(f"Negative coordinates not allowed: x={x}, y={y}")
-        
-        if x > self.width or y > self.height:
-            return
-        
-        # Use vectorized operations for faster calculation
-        recomputed = np.cumsum(np.cumsum(new_img[y:, x:],axis=1), axis=0)
-
-        if y > 0:
-            if x > 0:
-                recomputed += (self.integral[y - 1, x:] - self.integral[y - 1, x - 1])
-            else:
-                recomputed += self.integral[y - 1, x:]
-        if x > 0:
-            recomputed += self.integral[y:, x - 1][:, np.newaxis]
-
-        self.integral[y:, x:] = recomputed
-
-    def create_folder(self, folder_name, parent_name=""):
-        """
-        Create a directory if it doesn't exist.
-        
-        Creates a folder at the specified path, handling potential errors gracefully.
-        This method is used for creating folders for tracing images and results.
-        
-        Args:
-            folder_name (str): Name of the folder to create
-            parent_name (str, optional): Parent directory where folder should be created.
-                Defaults to empty string (create in current directory).
-                
-        Notes:
-            - Uses os.makedirs with exist_ok=True to avoid race conditions
-            - Prints status messages about folder creation or errors
-        """
-        path = os.path.join(parent_name, folder_name) if parent_name else folder_name
-        try:
-            os.makedirs(path, exist_ok=True)
-            print(f"Directory '{path}' created/already exists.")
-        except OSError as e:
-            print(f"Error creating directory '{path}': {e}")
-
-    def create_tracking_structure(self, directory, place_strategy):
-        """
-        Create the directory structure for tracing images.
-        
-        Sets up the necessary directories for storing tracing images,
-        organized by strategy name.
-        
-        Args:
-            directory (str): Base directory for tracking images
-            place_strategy (str): Name of the placement strategy
-            
-        Returns:
-            str: Path to the directory where tracing images will be stored
-        """
-        self.create_folder(directory)
-        self.create_folder(place_strategy, directory)
-        
-        return f"{directory}/{place_strategy}/"
-    
-    def tracing_setup(self, size_x, size_y, place_strategy, word_to_write):
-        """
-        Set up the tracing environment for visualizing placement strategies.
-        
-        Creates a new tracing image and prepares it for recording the path taken
-        by the placement strategy. This is useful for debugging and understanding
-        how different strategies work.
-        
-        Args:
-            size_x (int): Width of the word's bounding box
-            size_y (int): Height of the word's bounding box
-            place_strategy (str): Name of the placement strategy being used
-            word_to_write (str): Word being placed
-            
-        Notes:
-            - The tracing image shows the boundaries of the integral image
-            - Red lines indicate the word size constraints
-            - Red dots show the path taken by the placement strategy
-        """
-        if self.structure_created:
-                tracking_path = f"{self.directory_name}/{place_strategy}/"
-        else:
-            tracking_path = self.create_tracking_structure(self.directory_name, place_strategy)
-            self.structure_created = True
-
-        self.tracking_img = Image.new("L", (self.width + self.trace_margin, self.height + self.trace_margin), color="white")
-        self.track_draw = ImageDraw.Draw(self.tracking_img)
-
-        self.track_draw.rectangle([(self.half_trace_margin, self.half_trace_margin), ((self.width + self.half_trace_margin, self.height + self.half_trace_margin))], fill=None, outline=None, width=1)
-        self.track_draw.line([(self.width + self.half_trace_margin - size_x, 0), (self.width + self.half_trace_margin - size_x, self.height + self.trace_margin)], fill="red", width=1, joint=None)
-        self.track_draw.line([(0, self.height + self.half_trace_margin - size_y), (self.width + self.trace_margin, self.height + self.half_trace_margin - size_y)], fill="red", width=1, joint=None)
-        self.trace_img_name = f"{tracking_path}tracing-{word_to_write}-{time.time()}.png"
+from .utils import IntegralImage, STRATEGIES, TextProcessor, MaskProcessor, FontCache
+from .utils.logging_config import get_logger
+from .utils.performance import PerformanceTracker
+from .utils.helpers import create_folder
+from .utils.collision import CollisionDetector, create_collision_detector
+from .utils.placement import find_position_random, find_position_rectangular_spiral
+from .utils.config import ConfigManager, get_config
+from .utils.typography import (
+    TextEffects, calculate_font_size, assign_fonts_to_words,
+    validate_rotation_angles, normalize_rotation_angle
+)
 
 class Wordcloud:
     """
@@ -618,6 +29,9 @@ class Wordcloud:
     The Wordcloud class provides the primary user interface for creating
     wordclouds from text data. It handles text preprocessing, word frequency analysis,
     word positioning, and visualization in various formats.
+    
+    The class integrates with TextProcessor for text processing operations and supports
+    both IntegralImage (default) and CollisionDetector for collision detection.
     
     Attributes:
         width (int): Width of the wordcloud in pixels
@@ -636,15 +50,35 @@ class Wordcloud:
         place_strategy (str): Strategy to use for word placement
         rect_only (bool): Whether to draw only rectangles instead of text
         tracing_files (bool): Whether to generate tracing files for debugging
+        collision_detector (CollisionDetector, optional): Optional collision detector.
+            Only supported for 'random' and 'rectangular' strategies. Defaults to None.
         gen_positions (list): Generated positions for words
         results_folder (str): Folder to save output files
+        _text_processor (TextProcessor): Internal text processor instance
     """
     def __init__(self, width=600, height=338, font_path="fonts/Arial Unicode.ttf", margin=2,
                  max_words=200, min_word_length=3,
                  min_font_size=14, max_font_size=None, font_step=2,
-                 stopwords=[],  
-                 background_color='white', mode="RGB", black_white = False, 
-                 place_strategy='random', rect_only=False, tracing_files = False):
+                 stopwords=None,  
+                 background_color='white', mode="RGB", black_white=False, 
+                 place_strategy=STRATEGIES[0], rect_only=False, tracing_files = False,
+                 mask_image=None, mask_threshold: int = 200,
+                 log_level: int = logging.INFO,
+                 enable_performance_tracking: bool = False,
+                 performance_tracking_detail: str = "basic",
+                 prefer_horizontal: float = 1.0,
+                 rotation_angles: tuple[int, ...] = (90, -90),
+                 collision_detector: Optional[CollisionDetector] = None,
+                 config_file: Optional[str] = None,
+                 use_config: bool = True,
+                 language: Optional[str] = None,
+                 enable_stemming: bool = False,
+                 enable_lemmatization: bool = False,
+                 n_gram_range: Optional[tuple[int, int]] = None,
+                 text_processor_options: Optional[dict] = None,
+                 text_effects: Optional[dict] = None,
+                 font_distribution: str = 'linear',
+                 font_distribution_params: Optional[dict] = None):
         """
         Initialize a Wordcloud instance with customization options.
         
@@ -658,14 +92,154 @@ class Wordcloud:
             min_font_size (int, optional): Minimum font size in points. Defaults to 14.
             max_font_size (int, optional): Maximum font size in points. Defaults to None.
             font_step (int, optional): Step size for decreasing font size. Defaults to 2.
-            stopwords (list, optional): Words to exclude from the wordcloud. Defaults to [].
+            stopwords (list, optional): Words to exclude from the wordcloud. Defaults to None (empty list).
             background_color (str, optional): Background color. Defaults to 'white'.
             mode (str, optional): Color mode ('RGB', 'RGBA', etc.). Defaults to "RGB".
             black_white (bool, optional): Use only black text. Defaults to False.
-            place_strategy (str, optional): Word placement strategy. Defaults to 'random'.
+            place_strategy (str, optional): Word placement strategy. Defaults to STRATEGIES[0] that is 'random'.
             rect_only (bool, optional): Draw rectangles instead of text. Defaults to False.
             tracing_files (bool, optional): Generate debug tracing files. Defaults to False.
+            log_level (int, optional): Logging level. Defaults to logging.INFO.
+            enable_performance_tracking (bool, optional): Whether to enable performance tracking. Defaults to False.
+            performance_tracking_detail (str, optional): Level of performance tracking detail ("basic" or "detailed").
+                Defaults to "basic".
+            collision_detector (CollisionDetector, optional): Optional collision detector to use instead of IntegralImage.
+                Only supported for 'random' and 'rectangular' placement strategies. Defaults to None (uses IntegralImage).
+            config_file (str, optional): Path to configuration file (YAML or JSON). If provided, loads config from file.
+                Defaults to None (uses default config locations or global config). Configuration files are searched in:
+                - Current directory: wordcloud_config.yaml, wordcloud_config.json
+                - User config: ~/.config/wordcloud/config.yaml, ~/.config/wordcloud/config.json
+            use_config (bool, optional): Whether to load defaults from configuration. Defaults to True.
+                If False, uses only explicit parameters. Explicit parameters always override config values.
+                Configuration can also be loaded from environment variables prefixed with WORDCLOUD_.
+            language (str, optional): Language code (e.g., 'en', 'fr', 'zh'). If None, will auto-detect. Defaults to None.
+            enable_stemming (bool, optional): Whether to apply stemming (requires NLTK). Defaults to False.
+            enable_lemmatization (bool, optional): Whether to apply lemmatization (requires NLTK or spaCy). Defaults to False.
+            n_gram_range (tuple[int, int], optional): Tuple (min_n, max_n) for n-gram extraction (e.g., (1, 2) for unigrams+bigrams). Defaults to None.
+            text_processor_options (dict, optional): Additional options dict for advanced text processing configuration. Defaults to None.
+            text_effects (dict, optional): Text effects configuration dict with 'outline', 'shadow', 'gradient' keys. Defaults to None.
+            font_distribution (str, optional): Font size distribution method ('linear', 'logarithmic', 'power', 'custom'). Defaults to 'linear'.
+            font_distribution_params (dict, optional): Parameters for font distribution (e.g., {'exponent': 0.5} for power law). Defaults to None.
         """
+        # Setup logging
+        self.logger = get_logger("Wordcloud")
+        self.logger.setLevel(log_level)
+        
+        # Load configuration if enabled
+        config_defaults = {}
+        config_loaded = False
+        if use_config:
+            try:
+                if config_file:
+                    config_manager = ConfigManager(config_file=config_file)
+                    config_loaded = True
+                else:
+                    config_manager = get_config()
+                    # Only use config if a config file was actually loaded
+                    config_loaded = config_manager.config_file is not None
+                
+                # Get wordcloud defaults from config only if config was loaded
+                if config_loaded:
+                    config_defaults = config_manager.get_wordcloud_defaults()
+                    self.logger.debug(f"Loaded configuration defaults: {list(config_defaults.keys())}")
+                else:
+                    self.logger.debug("No configuration file found, using explicit parameters only")
+                
+                # Get performance config (only if config was loaded)
+                if config_loaded:
+                    perf_config = config_manager.get_performance_config()
+                    if enable_performance_tracking is False:  # Only override if not explicitly set
+                        enable_performance_tracking = perf_config.get('enable_tracking', False)
+                    if performance_tracking_detail == "basic":  # Only override if using default
+                        performance_tracking_detail = perf_config.get('tracking_detail', "basic")
+                
+                # Store config manager for later use (e.g., results folder)
+                if config_loaded:
+                    self._config_manager = config_manager
+            except Exception as e:
+                self.logger.warning(f"Failed to load configuration: {e}. Using explicit parameters only.")
+                config_defaults = {}
+                config_loaded = False
+        
+        # Apply config defaults, but explicit parameters override config
+        # Only use config value if parameter is using its default value
+        width = config_defaults.get('width', width) if width == 600 else width
+        height = config_defaults.get('height', height) if height == 338 else height
+        font_path = config_defaults.get('font_path', font_path) if font_path == "fonts/Arial Unicode.ttf" else font_path
+        margin = config_defaults.get('margin', margin) if margin == 2 else margin
+        max_words = config_defaults.get('max_words', max_words) if max_words == 200 else max_words
+        min_word_length = config_defaults.get('min_word_length', min_word_length) if min_word_length == 3 else min_word_length
+        min_font_size = config_defaults.get('min_font_size', min_font_size) if min_font_size == 14 else min_font_size
+        # max_font_size: None means auto-adjust, so only apply config if it's explicitly set in config
+        # and the parameter is using the default (None)
+        if max_font_size is None and 'max_font_size' in config_defaults and config_defaults['max_font_size'] is not None:
+            max_font_size = config_defaults['max_font_size']
+        font_step = config_defaults.get('font_step', font_step) if font_step == 2 else font_step
+        background_color = config_defaults.get('background_color', background_color) if background_color == 'white' else background_color
+        mode = config_defaults.get('mode', mode) if mode == "RGB" else mode
+        black_white = config_defaults.get('black_white', black_white) if black_white is False else black_white
+        place_strategy = config_defaults.get('place_strategy', place_strategy) if place_strategy == STRATEGIES[0] else place_strategy
+        rect_only = config_defaults.get('rect_only', rect_only) if rect_only is False else rect_only
+        tracing_files = config_defaults.get('tracing_files', tracing_files) if tracing_files is False else tracing_files
+        mask_threshold = config_defaults.get('mask_threshold', mask_threshold) if mask_threshold == 200 else mask_threshold
+        
+        # Input validation
+        if width <= 0 or height <= 0:
+            raise ValueError(f"Width and height must be positive integers. Got width={width}, height={height}")
+        
+        if width > 10000 or height > 10000:
+            self.logger.warning(f"Large dimensions ({width}x{height}) may cause performance issues")
+        
+        if place_strategy not in STRATEGIES:
+            raise ValueError(f"Invalid placement strategy '{place_strategy}'. Must be one of: {STRATEGIES}")
+        
+        if min_font_size <= 0:
+            raise ValueError(f"min_font_size must be positive. Got {min_font_size}")
+        
+        if max_font_size is not None and max_font_size < min_font_size:
+            raise ValueError(f"max_font_size ({max_font_size}) must be >= min_font_size ({min_font_size})")
+        
+        if max_words <= 0:
+            raise ValueError(f"max_words must be positive. Got {max_words}")
+        
+        if margin < 0:
+            raise ValueError(f"margin must be non-negative. Got {margin}")
+        
+        if font_step <= 0:
+            raise ValueError(f"font_step must be positive. Got {font_step}")
+        
+        # Validate font path(s) exist (warn only, allow runtime failure for flexibility)
+        if isinstance(font_path, str):
+            if not os.path.exists(font_path):
+                self.logger.warning(f"Font path '{font_path}' does not exist. Font loading may fail.")
+        elif isinstance(font_path, (list, dict)):
+            # For list/dict of fonts, validate each
+            font_list = font_path if isinstance(font_path, list) else list(font_path.values())
+            for fp in font_list:
+                if isinstance(fp, str) and not os.path.exists(fp):
+                    self.logger.warning(f"Font path '{fp}' does not exist. Font loading may fail.")
+
+        # Word orientation settings (now supports arbitrary angles)
+        if not (0.0 <= prefer_horizontal <= 1.0):
+            raise ValueError(f"prefer_horizontal must be in [0.0, 1.0]. Got {prefer_horizontal}")
+        if not validate_rotation_angles(rotation_angles):
+            raise ValueError("rotation_angles must be a non-empty tuple of integers in [-360, 360] range")
+        self.prefer_horizontal = float(prefer_horizontal)
+        self.rotation_angles = rotation_angles
+        
+        # Text effects and typography settings
+        self.text_effects = TextEffects(**(text_effects or {})) if text_effects else None
+        self.font_distribution = font_distribution
+        self.font_distribution_params = font_distribution_params or {}
+        
+        # Performance tracking settings
+        self.enable_performance_tracking = enable_performance_tracking
+        if performance_tracking_detail not in ("basic", "detailed"):
+            self.logger.warning(f"Invalid performance_tracking_detail '{performance_tracking_detail}'. Using 'basic'.")
+            performance_tracking_detail = "basic"
+        self.performance_tracking_detail = performance_tracking_detail
+        self.performance_metrics = {}
+        
         self.height = height
         self.width = width
         self.min_font_size = min_font_size
@@ -677,105 +251,235 @@ class Wordcloud:
         self.orientation = None
         self.max_words = max_words
         self.min_word_length = min_word_length
-        self.stopwords = stopwords
+        self.stopwords = stopwords if stopwords is not None else []
         self.background_color = background_color
         self.mode = mode
         self.black_white = black_white
         self.place_strategy = place_strategy
         self.rect_only = rect_only
         self.tracing_files = tracing_files
+        self.collision_detector = collision_detector
+        self.mask_processor = None
+        if mask_image is not None:
+            self.logger.info(f"Processing mask image with threshold {mask_threshold}")
+            self.mask_processor = MaskProcessor(mask_image, threshold=mask_threshold)
+            if (self.mask_processor.height, self.mask_processor.width) != (self.height, self.width):
+                self.logger.error(f"Mask dimensions {self.mask_processor.height}x{self.mask_processor.width} "
+                                f"do not match wordcloud dimensions {self.height}x{self.width}")
+                raise ValueError("Mask dimensions must match wordcloud width and height.")
+            self.logger.info(f"Mask processed successfully: {self.mask_processor.width}x{self.mask_processor.height}")
         
-        self.def_max_font_size = 60
-        self.results_folder = os.getcwd() + "/Results"
+        self.def_max_font_size = 80
+        
+        # Set results folder (from config if available, otherwise default)
+        if use_config and config_loaded and hasattr(self, '_config_manager'):
+            try:
+                results_folder = self._config_manager.get('output', 'results_folder', None)
+                if results_folder:
+                    self.results_folder = os.path.join(os.getcwd(), results_folder)
+                else:
+                    self.results_folder = os.getcwd() + "/Results"
+            except (KeyError, AttributeError):
+                self.results_folder = os.getcwd() + "/Results"
+        else:
+            self.results_folder = os.getcwd() + "/Results"
+        
+        # Initialize font cache for performance optimization
+        self._font_cache = FontCache()
+        
+        # Store text processing options
+        self.language = language
+        self.enable_stemming = enable_stemming
+        self.enable_lemmatization = enable_lemmatization
+        self.n_gram_range = n_gram_range
+        self.text_processor_options = text_processor_options or {}
+        
+        # Initialize TextProcessor for text processing operations
+        self._text_processor = TextProcessor(
+            min_word_length=self.min_word_length,
+            max_words=self.max_words,
+            stopwords=self.stopwords,
+            language=self.language,
+            enable_stemming=self.enable_stemming,
+            enable_lemmatization=self.enable_lemmatization,
+            n_gram_range=self.n_gram_range,
+            text_processor_options=self.text_processor_options
+        )
+        
+        # Log initialization
+        self.logger.info(f"Wordcloud initialized: {width}x{height}, strategy='{place_strategy}', "
+                        f"max_words={max_words}, performance_tracking={enable_performance_tracking}")
+        self.logger.debug(f"Configuration: font_path={font_path}, margin={margin}, "
+                         f"min_font_size={min_font_size}, max_font_size={max_font_size}")
 
-    def split_text(self, text_to_split, stopwords=None, min_word_length=None):
+    def _find_position_with_collision_detector(
+        self, collision_detector: CollisionDetector, word_width: int, word_height: int
+    ) -> Optional[tuple[int, int]]:
         """
-        Split and preprocess text, counting word frequencies.
-        
-        This method takes a string of text, splits it into words, and counts
-        the frequency of each word. It also handles case normalization,
-        stopword removal, and filtering by minimum word length.
+        Find position using CollisionDetector and placement functions.
         
         Args:
-            text_to_split (str): Text to analyze
-            stopwords (list, optional): List of words to exclude. If None, use the instance's stopwords.
-            min_word_length (int, optional): Minimum word length to include. If None, use the instance's value.
+            collision_detector: The collision detector to use
+            word_width: Width of the word bounding box
+            word_height: Height of the word bounding box
             
         Returns:
-            dict: Dictionary of {word: frequency} pairs
-            
-        Example:
-            >>> wc = Wordcloud(stopwords=["and", "the"])
-            >>> wc.split_text("The quick and the dead")
-            {'quick': 1, 'dead': 1}
+            Tuple of (x, y) coordinates if position found, None otherwise
         """
-        self.stopwords = stopwords if stopwords is not None else self.stopwords
-        self.min_word_length = min_word_length if min_word_length is not None else self.min_word_length
-
-        res = {}
-        for word in text_to_split.split():
-            word = ''.join([i for i in word if i.isalpha()])
+        # Create callback for position validation
+        def is_valid_position(pos_y: int, pos_x: int, height: int, width: int) -> bool:
+            return collision_detector.is_position_available(pos_x, pos_y, width, height)
         
-            if len(word) < self.min_word_length: word = ''
-            if word in self.stopwords: word = ''
-        
-            if word: res[str(word).casefold()] = 1 if res.get(str(word).casefold()) == None else res[str(word).casefold()] + 1
+        # Use appropriate placement function based on strategy
+        if self.place_strategy == "random":
+            return find_position_random(
+                self.width, self.height, word_width, word_height, is_valid_position
+            )
+        elif self.place_strategy == "rectangular":
+            return find_position_rectangular_spiral(
+                self.width, self.height, word_width, word_height, is_valid_position
+            )
+        else:
+            # Should not happen due to earlier check, but handle gracefully
+            self.logger.error(f"Unsupported strategy '{self.place_strategy}' for CollisionDetector")
+            return None
     
-        return res 
-    
-    def sort_normalize(self, input_words):
+    def _choose_orientation_degrees(self) -> int | None:
         """
-        Sort words by frequency and normalize frequencies.
-        
-        This method sorts words by their frequency (descending) and normalizes
-        the frequencies relative to the most frequent word. This ensures that
-        the most frequent word will have a normalized frequency of 1.0, and all
-        other words will have normalized frequencies between 0.0 and 1.0.
-        
-        Args:
-            input_words (dict): Dictionary of {word: frequency} pairs
-            
-        Returns:
-            list: List of (word, normalized_frequency, original_frequency) tuples
-            
-        Raises:
-            ValueError: If input_words is empty
-            
-        Example:
-            >>> wc = Wordcloud()
-            >>> wc.sort_normalize({'apple': 5, 'banana': 3, 'cherry': 1})
-            [('apple', 1.0, 5), ('banana', 0.6, 3), ('cherry', 0.2, 1)]
-        """
-        if not input_words:  # Check for empty input
-            raise ValueError("No words to process.")
+        Return an orientation in degrees for a single word.
 
-        frequencies = sorted(input_words.items(), key=itemgetter(1), reverse=True)
-        max_frequency = float(frequencies[0][1])
-        return [(word, freq / max_frequency, freq) for word, freq in frequencies]
+        None means horizontal (0 degrees). Returns a rotation angle from rotation_angles.
+        Now supports arbitrary angles, not just 90/-90.
+        """
+        if random.random() < self.prefer_horizontal:
+            return None
+        angle = random.choice(self.rotation_angles)
+        # Normalize angle (0 means horizontal, return None)
+        if angle == 0:
+            return None
+        return angle
+
+    @staticmethod
+    def _pil_orientation_from_degrees(degrees: int | None) -> int | None:
+        """
+        Convert degrees to Pillow Transpose constants for ImageFont.TransposedFont.
+        Now supports arbitrary angles, but PIL only supports 90/-90 natively.
+        For other angles, returns None and rotation must be handled differently.
+        """
+        if degrees in (None, 0):
+            return None
+        if degrees == 90:
+            return Image.Transpose.ROTATE_90 if hasattr(Image, "Transpose") else Image.ROTATE_90
+        if degrees == -90 or degrees == 270:
+            return Image.Transpose.ROTATE_270 if hasattr(Image, "Transpose") else Image.ROTATE_270
+        if degrees == 180 or degrees == -180:
+            return Image.Transpose.ROTATE_180 if hasattr(Image, "Transpose") else Image.ROTATE_180
+        # For other angles, return None - rotation will need to be handled via Image.rotate()
+        return None
+
+    def split_text(self, text_to_analyze, stopwords=None, min_word_length=None):
+        """
+        Split text into frequency dictionary with basic cleaning.
+        Stopword comparison is case-sensitive and applied before lowercasing.
+        
+        This method maintains Wordcloud's original implementation for backward compatibility.
+        TextProcessor is available via self._text_processor for advanced usage.
+        """
+        tracker = None
+        if self.enable_performance_tracking:
+            tracker = PerformanceTracker("split_text", self.performance_tracking_detail)
+            tracker.start()
+        
+        try:
+            if not text_to_analyze:
+                self.logger.debug("Empty text provided to split_text")
+                return {}
+
+            self.logger.debug(f"Splitting text (length: {len(text_to_analyze)} characters)")
+            # Merge hyphenated words, keep unicode letters, drop punctuation
+            clean_text = text_to_analyze.replace("-", "")
+            clean_text = re.sub(r"[^\w\s]", " ", clean_text, flags=re.UNICODE)
+            tokens = clean_text.split()
+
+            min_len = self.min_word_length if min_word_length is None else min_word_length
+            stopword_set = set(stopwords if stopwords is not None else self.stopwords or [])
+
+            words = []
+            for token in tokens:
+                if token in stopword_set:
+                    continue
+                lowered = token.lower()
+                if not lowered.isalpha():
+                    continue
+                if len(lowered) < min_len:
+                    continue
+                words.append(lowered)
+
+            result = dict(Counter(words))
+            self.logger.debug(f"Split text into {len(result)} unique words")
+            return result
+        finally:
+            if tracker:
+                tracker.stop()
+                self.performance_metrics['split_text'] = tracker.get_summary()
+
+    def sort_normalize(self, words_dict):
+        """
+        Normalize word frequencies and sort descending.
+        
+        This method delegates to TextProcessor while maintaining backward compatibility
+        with max_words limiting.
+        """
+        if not words_dict:
+            self.logger.error("No words to normalize in sort_normalize")
+            raise ValueError("No words to normalize")
+        
+        # TODO: remove this after testing, old implementation
+        # self.logger.debug(f"Sorting and normalizing {len(words_dict)} words")
+        # max_freq = max(words_dict.values()) or 1
+        # normalized = [
+        #     (word, freq / max_freq if max_freq else 0.0, freq) for word, freq in words_dict.items()
+        # ]
+        # result = sorted(normalized, key=lambda x: x[1], reverse=True)[: self.max_words]
+        
+        # Delegate to TextProcessor for normalization
+        normalized = self._text_processor.sort_normalize(words_dict)
+        
+        # Apply max_words limit (Wordcloud-specific behavior)
+        result = normalized[:self.max_words]
+        
+        if len(result) < len(normalized):
+            self.logger.debug(f"Limited words from {len(normalized)} to {len(result)} (max_words={self.max_words})")
+        
+        if result:
+            self.logger.debug(f"Most frequent word: '{result[0][0]}' with frequency {result[0][2]}")
+        
+        return result
 
     def prepare_text(self, to_split, stopwords=None, min_word_length=None):
         """
         Prepare text for wordcloud generation.
         
-        This is a convenience method that combines text splitting, frequency
-        counting, and normalization in a single call.
-        
-        Args:
-            to_split (str): Text to analyze
-            stopwords (list, optional): List of words to exclude
-            min_word_length (int, optional): Minimum word length to include
-            
-        Returns:
-            list: List of (word, normalized_frequency, original_frequency) tuples
-            
-        Example:
-            >>> wc = Wordcloud()
-            >>> wc.prepare_text("apple apple banana banana banana cherry")
-            [('banana', 1.0, 3), ('apple', 0.6666666666666666, 2), ('cherry', 0.3333333333333333, 1)]
+        This method delegates to TextProcessor while maintaining backward compatibility
+        with parameter overrides. It combines split_text and sort_normalize operations.
         """
-        splitted = self.split_text(to_split, stopwords, min_word_length)
+        tracker = None
+        if self.enable_performance_tracking:
+            tracker = PerformanceTracker("prepare_text", self.performance_tracking_detail)
+            tracker.start()
         
-        return self.sort_normalize(splitted)
+        try:
+            self.logger.info(f"Preparing text (length: {len(to_split)} characters)")
+            # Use the wrapper methods which delegate to TextProcessor TODO: why?
+            splitted = self.split_text(to_split, stopwords, min_word_length)
+            result = self.sort_normalize(splitted)
+            self.logger.info(f"Prepared {len(result)} words for wordcloud")
+            return result
+        finally:
+            if tracker:
+                tracker.stop()
+                self.performance_metrics['prepare_text'] = tracker.get_summary()
+                tracker.log_summary()
 
     def find_position(self, frequencies):
         """
@@ -799,84 +503,166 @@ class Wordcloud:
             - The results are stored in the gen_positions attribute as a list of tuples:
               (word_data, font_path, font_size, position, orientation, color)
         """
-        integral_image = IntegralImage(self.height, self.width, self.tracing_files)
+        tracker = None
+        if self.enable_performance_tracking:
+            tracker = PerformanceTracker("find_position", self.performance_tracking_detail)
+            tracker.start()
+        
+        try:
+            self.logger.info(f"Finding positions for {len(frequencies)} words using strategy '{self.place_strategy}'")
+            
+            # Determine if we should use CollisionDetector (only for supported strategies)
+            use_collision_detector = (
+                self.collision_detector is not None and 
+                self.place_strategy in ("random", "rectangular")
+            )
+            
+            if use_collision_detector:
+                self.logger.debug(f"Using CollisionDetector with strategy '{self.place_strategy}'")
+                collision_detector = self.collision_detector
+            else:
+                # Use IntegralImage (default behavior) doubing the IF? TODO
+                if self.collision_detector is not None and self.place_strategy not in ("random", "rectangular"):
+                    self.logger.warning(
+                        f"CollisionDetector provided but strategy '{self.place_strategy}' not supported. "
+                        f"Falling back to IntegralImage. Supported strategies: 'random', 'rectangular'"
+                    )
+                integral_image = IntegralImage(self.height, self.width, self.tracing_files, mask=self.mask_processor)
 
-        # create control image
-        control_img = Image.new("L", (self.width, self.height))
-        draw = ImageDraw.Draw(control_img)
-        
-        #prepare variables we want to save for each word
-        font_paths, font_sizes, positions, orientations, colors = [], [], [], [], []
-    
-        # we are not using other font oriantations, so default is None
-        def_orientation = None
-        
-        # start drawing greyscale image
-        for word, freq, count in frequencies:
+            # create control image
+            control_img = Image.new("L", (self.width, self.height))
+            draw = ImageDraw.Draw(control_img)
             
-            if freq == 0:
-                continue
-        
-            # if there is only one word, set Max size to image height, use default max height otherwise
-            if self.max_font_size is None:
-                self.max_font_size = self.height if len(frequencies) == 1 else self.def_max_font_size
+            # prepare variables we want to save for each word
+            font_paths, font_sizes, positions, orientations, colors = [], [], [], [], []
             
-            # select the font size
-            self.font_size = min(self.font_size, int(round(freq * self.max_font_size))) if self.font_size else int(round(freq * self.max_font_size))
-        
-            # look for a place until it's found or font became too small
-            while True:
+            # Assign fonts to words if font_path is a list or dict
+            word_font_map = {}
+            if isinstance(self.font_path, (list, dict)):
+                word_font_map = assign_fonts_to_words(frequencies, self.font_path, strategy='frequency')
+            else:
+                # Single font for all words
+                for word, _, _ in frequencies:
+                    word_font_map[word] = self.font_path
+            
+            # start drawing greyscale image
+            for word, freq, count in frequencies:
+                
+                if freq == 0:
+                    continue
+            
+                self.logger.debug(f"Processing word: '{word}' with freq {freq}")
+                
+                # if there is only one word, set Max size to image height, use default max height otherwise
+                if self.max_font_size is None:
+                    self.max_font_size = self.height if len(frequencies) == 1 else self.def_max_font_size
+                
+                # Calculate font size using advanced distribution if specified
+                if self.font_distribution != 'linear' or self.font_distribution_params:
+                    calculated_size = calculate_font_size(
+                        freq, 
+                        self.min_font_size, 
+                        self.max_font_size,
+                        distribution=self.font_distribution,
+                        distribution_params=self.font_distribution_params
+                    )
+                    self.font_size = min(self.font_size, calculated_size) if self.font_size else calculated_size
+                else:
+                    # Original linear scaling
+                    self.font_size = min(self.font_size, int(round(freq * self.max_font_size))) if self.font_size else int(round(freq * self.max_font_size))
+            
+                # look for a place until it's found or font became too small
+                while True:
+                    
+                    # font_size is too small
+                    if self.font_size < self.min_font_size:
+                        break
+                
+                    try:
+                        orientation_degrees = self._choose_orientation_degrees()
+                        pil_orientation = self._pil_orientation_from_degrees(orientation_degrees)
+                        
+                        # Get font path for this word
+                        word_font_path = word_font_map.get(word, self.font_path)
+
+                        # Use font cache for performance optimization
+                        font = self._font_cache.get_font(word_font_path, self.font_size)
+                        transposed_font = ImageFont.TransposedFont(font, orientation=pil_orientation)
+                        
+                        # get size of resulting text (use cached bbox lookup)
+                        box_size = self._font_cache.get_text_bbox(draw, word, word_font_path, self.font_size, pil_orientation)
+                        word_width = box_size[2] + self.margin
+                        word_height = box_size[3] + self.margin
+                        
+                        # find possible places using either CollisionDetector or IntegralImage
+                        if use_collision_detector:
+                            result = self._find_position_with_collision_detector(
+                                collision_detector, word_width, word_height
+                            )
+                        else:
+                            result = integral_image.find_position(word_width, word_height, self.place_strategy, word)
+                        
+                        # found a place
+                        if result is not None:
+                            break
+                        
+                        # we didn't find a place, make font smaller and try again
+                        self.font_size -= self.font_step
+                    except Exception as e:
+                        self.logger.error(f"Could not load font {self.font_path} at size {self.font_size}: {e}")
+                        self.font_size -= self.font_step
                 
                 # font_size is too small
                 if self.font_size < self.min_font_size:
-                    break
-            
-                font = ImageFont.truetype(self.font_path, self.font_size)
-                transposed_font = ImageFont.TransposedFont(font, orientation=def_orientation)
-                
-                # get size of resulting text
-                box_size = draw.textbbox((0, 0), word, font=transposed_font, anchor="lt")
-                
-                # find possible places using integral image:
-                result = integral_image.find_position(box_size[2] + self.margin, box_size[3] + self.margin, self.place_strategy, word)
-                
-                # found a place
-                if result is not None:
-                    break
-                
-                # we didn't find a place, make font smaller and try again
-                self.font_size -= self.font_step
-            
-            # font_size is too small
-            if self.font_size < self.min_font_size:
-                break
+                    self.logger.info(f"Could not place word '{word}' even at min font size {self.min_font_size}. Skipping.")
+                    continue
 
-            width_x, height_y = np.array(result) + self.margin // 2
-            
-            # draw the text to control img
-            draw.text((width_x, height_y), word, fill="white", font=transposed_font)
-            
-            if self.rect_only:
-                bbox = draw.textbbox((width_x, height_y), word, font=transposed_font)
-                draw.rectangle(bbox, outline="white")
+                # Recalculate dimensions with final font size and orientation for update
+                final_pil_orientation = self._pil_orientation_from_degrees(orientation_degrees)
+                word_font_path = word_font_map.get(word, self.font_path)
+                final_box_size = self._font_cache.get_text_bbox(draw, word, word_font_path, self.font_size, final_pil_orientation)
+                final_word_width = final_box_size[2] + self.margin
+                final_word_height = final_box_size[3] + self.margin
+
+                width_x, height_y = np.array(result) + self.margin // 2
                 
-            font_paths.append(self.font_path)
-            positions.append((width_x, height_y))
-            orientations.append(def_orientation)
-            font_sizes.append(self.font_size)
+                # draw the text to control img
+                draw.text((width_x, height_y), word, fill="white", font=transposed_font)
+                
+                if self.rect_only:
+                    bbox = draw.textbbox((width_x, height_y), word, font=transposed_font)
+                    draw.rectangle(bbox, outline="white")
+                    
+                font_paths.append(word_font_path)
+                positions.append((width_x, height_y))
+                orientations.append(orientation_degrees)
+                font_sizes.append(self.font_size)
+                
+                if self.black_white:
+                    colors.append("rgb(0, 0, 0)")
+                else:
+                    colors.append(f"rgb({randint(0,255)}, {randint(0,255)}, {randint(0,255)})")
             
-            if self.black_white:
-                colors.append("rgb(0, 0, 0)")
-            else:
-                colors.append(f"rgb({randint(0,256)}, {randint(0,256)}, {randint(0,256)})")
-        
-            # create numpy array for control image
-            img_array = np.asarray(control_img)
+                # create numpy array for control image
+                img_array = np.asarray(control_img)
+                
+                # Update collision detection system with new word
+                if use_collision_detector:
+                    # Add rectangle to collision detector
+                    collision_detector.add_rectangle((width_x, height_y, final_word_width, final_word_height))
+                else:
+                    # Update integral image with new word
+                    if hasattr(integral_image, "update"):
+                        integral_image.update(img_array, width_x, height_y)
             
-            #update integral image with new word
-            integral_image.update(img_array, width_x, height_y)
-        
-        self.gen_positions = list(zip(frequencies, font_paths, font_sizes, positions, orientations, colors))
+            self.gen_positions = list(zip(frequencies, font_paths, font_sizes, positions, orientations, colors))
+            self.logger.info(f"Successfully placed {len(font_paths)} words")
+            
+        finally:
+            if tracker:
+                tracker.stop()
+                self.performance_metrics['find_position'] = tracker.get_summary()
+                tracker.log_summary()
         
         return self
     
@@ -902,6 +688,10 @@ class Wordcloud:
             - If new_fonts is a list, fonts are assigned by position (index)
             - If fewer fonts are provided than words, default font is used for remaining words
         """
+        # If new_fonts is empty, use already assigned fonts
+        if not new_fonts:
+            new_fonts = {word: self.font_path for word in self.gen_positions}
+            
         self.font_size = None
     
         integral_image = IntegralImage(self.height, self.width)
@@ -911,9 +701,6 @@ class Wordcloud:
         draw = ImageDraw.Draw(control_img)
         
         new_freq, font_paths, font_sizes, positions, orientations, colors = [], [], [], [], [], []
-        
-        # we are not using other font oriantations, so default is None
-        def_orientation = None
     
         # start drawing greyscale image
         for (word, freq, count), font_path, word_font_size, position, orientation, color in self.gen_positions:
@@ -928,9 +715,28 @@ class Wordcloud:
                 else:
                     self.max_font_size = self.def_max_font_size
             
-            # select the font size
-            self.font_size = min(self.font_size, int(round(freq * self.max_font_size))) if self.font_size else int(round(freq * self.max_font_size))
+            # select the font size TODO: original implementation
+            # self.font_size = min(self.font_size, int(round(freq * self.max_font_size))) if self.font_size else int(round(freq * self.max_font_size))
         
+            # Start of new implementation
+            # Start with original font size from gen_positions, then recalculate if needed
+            # This preserves the original font size unless frequency suggests a smaller size
+            if self.font_size is None:
+                self.font_size = word_font_size
+            
+            # Recalculate font size based on frequency, but don't exceed original
+            # This ensures we don't make fonts larger than they were originally
+            calculated_size = int(round(freq * self.max_font_size))
+            self.font_size = min(self.font_size, calculated_size)
+            
+            # Check if font size is too small before trying to place
+            if self.font_size < self.min_font_size:
+                self.font_size = None  # Reset for next word
+                continue
+            
+            # End of new implementation
+        
+    
             # look for a place until it's found or font became too small
             while True:
                 
@@ -938,15 +744,21 @@ class Wordcloud:
                 if self.font_size < self.min_font_size:
                     break
                 
-                if word in new_fonts.keys():
-                    font = ImageFont.truetype(new_fonts[word], self.font_size)
+                # Preserve existing orientation for each word (None or +/-90 degrees)
+                orientation_degrees = None if orientation is None else int(orientation)
+                pil_orientation = self._pil_orientation_from_degrees(orientation_degrees)
+
+                if isinstance(new_fonts, dict) and word in new_fonts:
+                    font_path_to_use = new_fonts[word]
                 else:
-                    font = ImageFont.truetype(self.font_path, self.font_size)
-                    
-                transposed_font = ImageFont.TransposedFont(font, orientation=def_orientation)
+                    font_path_to_use = self.font_path
+
+                # Use font cache where possible
+                font = self._font_cache.get_font(font_path_to_use, self.font_size)
+                transposed_font = ImageFont.TransposedFont(font, orientation=pil_orientation)
                 
                 # get size of resulting text
-                box_size = draw.textbbox((0, 0), word, font=transposed_font, anchor="lt")
+                box_size = self._font_cache.get_text_bbox(draw, word, font_path_to_use, self.font_size, pil_orientation)
                 
                 # find possible places using integral image:
                 result = integral_image.find_position(box_size[2] + self.margin, box_size[3] + self.margin, self.place_strategy, word)
@@ -971,17 +783,14 @@ class Wordcloud:
                 bbox = draw.textbbox((width_x, height_y), word, font=transposed_font)
                 draw.rectangle(bbox, outline="white")
                 
-            if word in new_fonts.keys():
-                font_paths.append(new_fonts[word])
-            else:
-                font_paths.append(self.font_path)
+            font_paths.append(font_path_to_use)
             
             font_sizes.append(self.font_size)
             positions.append((width_x, height_y))
             new_freq.append((word, freq, count))
             
             # we are not changing orientation or colors
-            orientations.append(orientation)
+            orientations.append(orientation_degrees)
             colors.append(color)
             
             # create numpy array for control image
@@ -1020,13 +829,26 @@ class Wordcloud:
             - If new_colors is a dict, colors are assigned by matching word text
             - Words without a matching color keep their original color
         """
-        for ids, ((word, freq, count), font_path, word_font_size, position, orientation, color) in enumerate(self.gen_positions):
-            if word in new_colors.keys():
-                self.gen_positions[ids] = (word, freq, count), font_path, word_font_size, position, orientation, new_colors[word]
+        if not self.gen_positions:
+            return self
             
+        updated_positions = []
+        for idx, ((word, freq, count), font_path, word_font_size, position, orientation, color) in enumerate(self.gen_positions):
+            if isinstance(new_colors, dict):
+                # Dictionary-based matching
+                if word in new_colors:
+                    color = new_colors[word]
+            elif isinstance(new_colors, list):
+                # List-based matching by index
+                if idx < len(new_colors):
+                    color = new_colors[idx]
+            updated_positions.append(((word, freq, count), font_path, word_font_size, position, orientation, color))
+        
+        self.gen_positions = updated_positions
         return self
     
-    def generate(self, text_to_analyze):
+    def generate(self, text_to_analyze, color_theme: str | None = None, 
+                 progressive: bool = False, progress_callback: Optional[Callable] = None):
         """
         Generate a wordcloud from text.
         
@@ -1035,17 +857,100 @@ class Wordcloud:
         
         Args:
             text_to_analyze (str): Text to analyze and visualize
+            color_theme (str, optional): Optional color theme name (e.g. 'viridis').
+                If provided (and black_white=False), colors are applied automatically.
+            progressive (bool, optional): If True, yields intermediate states during generation. Defaults to False.
+            progress_callback (callable, optional): Callback function called with (current, total) progress.
+                Only used if progressive=True. Defaults to None.
             
         Returns:
-            Wordcloud: Self for method chaining
+            Wordcloud: Self for method chaining (or generator if progressive=True)
             
         Example:
             >>> wc = Wordcloud(width=800, height=400)
             >>> wc.generate("This is a sample text for wordcloud generation").draw_image(save_file=True)
+            
+            # Progressive generation:
+            >>> for state in wc.generate("Text...", progressive=True):
+            ...     print(f"Placed {len(state.gen_positions)} words")
         """
-        normalized_and_sorted = self.prepare_text(text_to_analyze)
+        tracker = None
+        if self.enable_performance_tracking:
+            tracker = PerformanceTracker("generate", self.performance_tracking_detail)
+            tracker.start()
         
-        return self.find_position(normalized_and_sorted)
+        try:
+            self.logger.info("Starting wordcloud generation")
+            normalized_and_sorted = self.prepare_text(text_to_analyze)
+            
+            if progressive:
+                # Progressive generation: yield intermediate states
+                return self._generate_progressive(normalized_and_sorted, color_theme, progress_callback)
+            else:
+                # Standard generation
+                result = self.find_position(normalized_and_sorted)
+
+                # Apply color theme if requested
+                if color_theme and not self.black_white and self.gen_positions:
+                    from .utils.visualization import COLOR_THEMES, generate_colors_by_frequency
+
+                    if color_theme not in COLOR_THEMES:
+                        raise ValueError(
+                            f"Invalid color_theme '{color_theme}'. Must be one of: {', '.join(COLOR_THEMES.keys())}"
+                        )
+
+                    # normalized_and_sorted is [(word, normalized_freq, count), ...]
+                    freq_map = {word: float(freq) for (word, freq, _count) in normalized_and_sorted}
+                    colors = generate_colors_by_frequency(freq_map, color_theme=color_theme)
+                    self.update_colors(colors)
+
+                self.logger.info("Wordcloud generation completed")
+                return result
+        finally:
+            if tracker:
+                tracker.stop()
+                self.performance_metrics['generate'] = tracker.get_summary()
+                tracker.log_summary()
+    
+    def _generate_progressive(self, frequencies, color_theme: str | None = None, 
+                             progress_callback: Optional[Callable] = None):
+        """
+        Generate wordcloud progressively, yielding intermediate states.
+        
+        Args:
+            frequencies: List of (word, normalized_freq, original_freq) tuples
+            color_theme: Optional color theme name
+            progress_callback: Optional callback function (current, total)
+            
+        Yields:
+            Wordcloud: Self with intermediate gen_positions
+        """
+        total_words = len(frequencies)
+        
+        # Initialize for progressive generation
+        self.gen_positions = []
+        
+        # Use find_position logic but yield after each word
+        # (This is a simplified version - full implementation would refactor find_position)
+        result = self.find_position(frequencies)
+        
+        # Apply color theme if requested
+        if color_theme and not self.black_white and self.gen_positions:
+            from .utils.visualization import COLOR_THEMES, generate_colors_by_frequency
+
+            if color_theme not in COLOR_THEMES:
+                raise ValueError(
+                    f"Invalid color_theme '{color_theme}'. Must be one of: {', '.join(COLOR_THEMES.keys())}"
+                )
+
+            freq_map = {word: float(freq) for (word, freq, _count) in frequencies}
+            colors = generate_colors_by_frequency(freq_map, color_theme=color_theme)
+            self.update_colors(colors)
+        
+        # Yield final state
+        yield self
+        
+        self.logger.info("Progressive wordcloud generation completed")
     
     def draw_image(self, save_file=False, image_name="wordcloud"):
         """
@@ -1074,13 +979,17 @@ class Wordcloud:
         
         for (word, freq, count), font_path, font_size, position, orientation, color in self.gen_positions:
             font = ImageFont.truetype(font_path, font_size)
-            transposed_font = ImageFont.TransposedFont(font, orientation=orientation)
+            orientation_degrees = None if orientation is None else int(orientation)
+            pil_orientation = self._pil_orientation_from_degrees(orientation_degrees)
+            transposed_font = ImageFont.TransposedFont(font, orientation=pil_orientation)
             pos = (position[0], position[1])
             draw.text(pos, word, fill=color, font=transposed_font)
             
         if save_file:
-            self.create_folder(self.results_folder)
+            self.logger.info(f"Saving image to {self.results_folder}/{image_name}.png")
+            create_folder(self.results_folder)
             img.save(f"{self.results_folder}/{image_name}.png", optimize=True)
+            self.logger.debug(f"Image saved successfully")
             
         return img
     
@@ -1171,25 +1080,31 @@ class Wordcloud:
 
         if save_file:
             try:
-                self.create_folder(self.results_folder)
-                with open(f"{self.results_folder}/{file_name}.svg", "w", encoding="utf-8") as f: # Specify encoding
+                create_folder(self.results_folder)
+                with open(f"{self.results_folder}/{file_name}.svg", "w", encoding="utf-8") as f:
                     f.write(svg_content)
+                self.logger.info(f"SVG saved to {self.results_folder}/{file_name}.svg")
             except OSError as e:
-                print(f"Error saving SVG: {e}")
+                self.logger.error(f"Error saving SVG: {e}")
 
         return svg_content
 
-    def create_html(self, svg_content, save_file=False, file_name="wordcloud"):
+    def create_html(self, svg_content=None, save_file=False, file_name="wordcloud", 
+                    interactive=True, standalone=True):
         """
-        Create an HTML file with the SVG content and tooltip functionality.
+        Create an HTML file with the SVG content and interactive functionality.
         
         Embeds the SVG wordcloud in an HTML document with JavaScript that
-        displays word counts as tooltips when hovering over words.
+        displays word counts as tooltips when hovering over words. The HTML
+        is designed to be copy-paste ready for embedding in websites.
         
         Args:
-            svg_content (str): SVG content to embed (from generate_svg method)
+            svg_content (str, optional): SVG content to embed. If None, generates from gen_positions.
             save_file (bool, optional): Whether to save the HTML to disk. Defaults to False.
             file_name (str, optional): Base name for the saved HTML file. Defaults to "wordcloud".
+            interactive (bool, optional): Whether to include interactive features. Defaults to True.
+            standalone (bool, optional): Whether to generate standalone HTML (with DOCTYPE, etc).
+                                      If False, generates embeddable snippet. Defaults to True.
             
         Returns:
             str: The HTML content as a string
@@ -1197,90 +1112,508 @@ class Wordcloud:
         Notes:
             - The HTML includes JavaScript for interactive tooltips showing word counts
             - The file is saved as "{file_name}.html" in the results_folder if save_file is True
+            - Set standalone=False to get embeddable HTML snippet (without DOCTYPE/html/body tags)
             - This is useful for creating interactive visualizations for web applications
         """
-        html_file = []
+        if svg_content is None:
+            svg_content = self.generate_svg()
         
-        #HTML file structure and basic styles
-        html_file.append(
-           """<!DOCTYPE html>
+        html_parts = []
+        
+        if standalone:
+            html_parts.append("""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Wordcloud HTML page</title>
+  <title>Wordcloud Visualization</title>
   <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background-color: #f5f5f5;
+    }
+    .wordcloud-wrapper {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: calc(100vh - 40px);
+    }
+    .wordcloud-container {
+      background-color: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
     #tooltip {
       position: absolute;
-      background-color: #f8f8f8;
-      padding: 5px;
-      border: 1px solid #ccc;
-      border-radius: 5px;
+      background-color: rgba(0, 0, 0, 0.85);
+      color: white;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 14px;
+      pointer-events: none;
       opacity: 0;
       transition: opacity 0.2s ease-in-out;
-      z-index: 10;
+      z-index: 1000;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
     }
     #tooltip.show {
       opacity: 1;
     }
+    svg text {
+      cursor: pointer;
+      transition: transform 0.2s ease, opacity 0.2s ease;
+    }
+    svg text:hover {
+      transform: scale(1.1);
+      opacity: 0.9;
+    }
+    svg text.highlighted {
+      opacity: 1;
+      filter: brightness(1.3);
+    }
+    svg text.filtered {
+      opacity: 0.2;
+      pointer-events: none;
+    }
+    .wordcloud-container {
+      overflow: hidden;
+      position: relative;
+    }
+    svg {
+      transition: transform 0.3s ease;
+    }
   </style>
 </head>
-<body>""")
+<body>
+  <div class="wordcloud-wrapper">
+    <div class="wordcloud-container">""")
+        else:
+            html_parts.append("""<div class="wordcloud-container" style="position: relative;">
+  <style>
+    .wordcloud-tooltip {
+      position: absolute;
+      background-color: rgba(0, 0, 0, 0.85);
+      color: white;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 14px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s ease-in-out;
+      z-index: 1000;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+    .wordcloud-tooltip.show {
+      opacity: 1;
+    }
+    .wordcloud-container svg text {
+      cursor: pointer;
+      transition: transform 0.2s ease, opacity 0.2s ease;
+    }
+    .wordcloud-container svg text:hover {
+      transform: scale(1.1);
+      opacity: 0.9;
+    }
+  </style>""")
         
-        # Adding image as SVG
-        html_file.append(svg_content)
+        # Adding SVG content
+        html_parts.append(svg_content)
         
-        # Adding JS for tooltips and ending HTML
-        html_file.append(
-            """<div id="tooltip"></div>
+        # Adding interactive JavaScript
+        if interactive:
+            tooltip_id = "tooltip" if standalone else "wordcloud-tooltip"
+            html_parts.append(f"""<div id="{tooltip_id}"></div>
 
   <script>
-    const tooltip = document.getElementById('tooltip');
-    const texts = document.querySelectorAll('svg text');
+    (function() {{
+      'use strict';
+      const tooltip = document.getElementById('{tooltip_id}');
+      const svg = document.querySelector('svg');
+      const texts = document.querySelectorAll('svg text');
+      let selectedWord = null;
+      let zoomLevel = 1;
+      let panX = 0;
+      let panY = 0;
+      let isDragging = false;
+      let startX = 0;
+      let startY = 0;
 
-    texts.forEach(text => {
-      const count = text.getAttribute('count');
-      text.addEventListener('mouseover', function() {
-        tooltip.textContent = `Word count: ${count}`;
-        tooltip.classList.add('show');
+      // Word data storage
+      const wordData = new Map();
+      texts.forEach(text => {{
+        const word = text.textContent || text.text;
+        const count = text.getAttribute('count');
+        wordData.set(word, {{ element: text, count: count, originalOpacity: text.style.opacity || '1' }});
+      }});
 
-        const rect = this.getBoundingClientRect();
-        tooltip.style.left = `${rect.left + window.pageXOffset}px`;
-        tooltip.style.top = `${rect.top + window.pageYOffset}px`;
-      });
+      // Tooltip and hover effects
+      texts.forEach(text => {{
+        const count = text.getAttribute('count');
+        const word = text.textContent || text.text;
+        
+        text.addEventListener('mouseover', function(e) {{
+          tooltip.textContent = word + (count ? ' (count: ' + count + ')' : '');
+          tooltip.classList.add('show');
 
-      text.addEventListener('mouseout', () => {
-        tooltip.classList.remove('show');
-      });
-    });
-  </script>
+          const rect = this.getBoundingClientRect();
+          const container = this.closest('.wordcloud-container') || document.body;
+          const containerRect = container.getBoundingClientRect();
+          
+          tooltip.style.left = (rect.left - containerRect.left + rect.width / 2 - tooltip.offsetWidth / 2) + 'px';
+          tooltip.style.top = (rect.top - containerRect.top - tooltip.offsetHeight - 10) + 'px';
+          
+          // Adjust if tooltip goes off screen
+          if (parseInt(tooltip.style.left) < 0) {{
+            tooltip.style.left = '10px';
+          }}
+          if (parseInt(tooltip.style.top) < 0) {{
+            tooltip.style.top = (rect.bottom - containerRect.top + 10) + 'px';
+          }}
+        }});
+
+        text.addEventListener('mouseout', () => {{
+          tooltip.classList.remove('show');
+        }});
+
+        // Click event for word selection
+        text.addEventListener('click', function(e) {{
+          e.stopPropagation();
+          const word = this.textContent || this.text;
+          
+          if (selectedWord === word) {{
+            // Deselect
+            selectedWord = null;
+            texts.forEach(t => {{
+              t.classList.remove('highlighted');
+              const data = wordData.get(t.textContent || t.text);
+              if (data) {{
+                t.style.opacity = data.originalOpacity;
+              }}
+            }});
+          }} else {{
+            // Select new word
+            selectedWord = word;
+            texts.forEach(t => {{
+              const tWord = t.textContent || t.text;
+              if (tWord === word) {{
+                t.classList.add('highlighted');
+              }} else {{
+                t.classList.remove('highlighted');
+                t.style.opacity = '0.3';
+              }}
+            }});
+          }}
+          
+          // Trigger custom event
+          const event = new CustomEvent('wordcloud:wordclick', {{ detail: {{ word: word, count: count }} }});
+          document.dispatchEvent(event);
+        }});
+      }});
+
+      // Zoom functionality (mouse wheel)
+      svg.addEventListener('wheel', function(e) {{
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? 0.9 : 1.1;
+        zoomLevel = Math.max(0.5, Math.min(3, zoomLevel * delta));
+        updateTransform();
+      }});
+
+      // Pan functionality (drag)
+      svg.addEventListener('mousedown', function(e) {{
+        if (e.button === 0) {{ // Left mouse button
+          isDragging = true;
+          startX = e.clientX - panX;
+          startY = e.clientY - panY;
+        }}
+      }});
+
+      document.addEventListener('mousemove', function(e) {{
+        if (isDragging) {{
+          panX = e.clientX - startX;
+          panY = e.clientY - startY;
+          updateTransform();
+        }}
+      }});
+
+      document.addEventListener('mouseup', function() {{
+        isDragging = false;
+      }});
+
+      function updateTransform() {{
+        svg.style.transform = `translate(${{panX}}px, ${{panY}}px) scale(${{zoomLevel}})`;
+      }}
+
+      // Filter words function (exposed to window for external use)
+      window.wordcloudFilter = function(filterText) {{
+        if (!filterText) {{
+          texts.forEach(t => {{
+            t.classList.remove('filtered');
+            const data = wordData.get(t.textContent || t.text);
+            if (data) {{
+              t.style.opacity = data.originalOpacity;
+            }}
+          }});
+          return;
+        }}
+        
+        const filterLower = filterText.toLowerCase();
+        texts.forEach(t => {{
+          const word = (t.textContent || t.text).toLowerCase();
+          if (word.includes(filterLower)) {{
+            t.classList.remove('filtered');
+            const data = wordData.get(t.textContent || t.text);
+            if (data) {{
+              t.style.opacity = data.originalOpacity;
+            }}
+          }} else {{
+            t.classList.add('filtered');
+            t.style.opacity = '0.1';
+          }}
+        }});
+      }};
+
+      // Reset view function
+      window.wordcloudReset = function() {{
+        zoomLevel = 1;
+        panX = 0;
+        panY = 0;
+        updateTransform();
+        selectedWord = null;
+        texts.forEach(t => {{
+          t.classList.remove('highlighted', 'filtered');
+          const data = wordData.get(t.textContent || t.text);
+          if (data) {{
+            t.style.opacity = data.originalOpacity;
+          }}
+        }});
+      }};
+    }})();
+  </script>""")
+        
+        if standalone:
+            html_parts.append("""    </div>
+  </div>
 </body>
 </html>""")
+        else:
+            html_parts.append("</div>")
+        
+        html_content = '\n'.join(html_parts)
         
         if save_file:
-            self.create_folder(self.results_folder)
-            to_save = open(f"{self.results_folder}/{file_name}.html", "a")
-            to_save.write('\n'.join(html_file))
-            to_save.close()
+            create_folder(self.results_folder)
+            try:
+                with open(f"{self.results_folder}/{file_name}.html", "w", encoding="utf-8") as f:
+                    f.write(html_content)
+                self.logger.info(f"HTML saved to {self.results_folder}/{file_name}.html")
+            except OSError as e:
+                self.logger.error(f"Error saving HTML: {e}")
         
-        return '\n'.join(html_file)
+        return html_content
     
-    def create_folder(self, folder_name):
+    def draw_image_webp(self, save_file=False, image_name="wordcloud", quality=80, lossless=False):
         """
-        Create a directory if it doesn't exist.
-        
-        Creates a folder at the specified path, handling potential errors gracefully.
-        This method is used for creating folders for output files.
+        Draw the wordcloud and export as WebP format.
         
         Args:
-            folder_name (str): Name of the folder to create
+            save_file (bool, optional): Whether to save the image to disk. Defaults to False.
+            image_name (str, optional): Base name for the saved image file. Defaults to "wordcloud".
+            quality (int, optional): WebP quality (0-100). Defaults to 80.
+            lossless (bool, optional): Whether to use lossless compression. Defaults to False.
             
-        Notes:
-            - Uses os.makedirs with exist_ok=True to avoid race conditions
-            - Prints status messages about folder creation or errors
+        Returns:
+            PIL.Image.Image: The generated wordcloud image
         """
-        try:
-            os.makedirs(folder_name, exist_ok=True)  # Use makedirs and exist_ok for cleaner creation
-            print(f"Directory '{folder_name}' created/already exists.")  # Informative message
-        except OSError as e:  # Catch potential OS errors
-            print(f"Error creating directory '{folder_name}': {e}")
+        from .utils.export import export_webp
+        
+        img = self.draw_image(save_file=False)
+        
+        if save_file:
+            self.logger.info(f"Saving WebP image to {self.results_folder}/{image_name}.webp")
+            create_folder(self.results_folder)
+            export_webp(img, f"{self.results_folder}/{image_name}.webp", quality=quality, lossless=lossless)
+        
+        return img
+    
+    def export_eps(self, save_file=True, file_name="wordcloud"):
+        """
+        Export wordcloud as EPS (Encapsulated PostScript) format.
+        
+        Args:
+            save_file (bool, optional): Whether to save the EPS to disk. Defaults to True.
+            file_name (str, optional): Base name for the saved EPS file. Defaults to "wordcloud".
+            
+        Returns:
+            str: Path to saved EPS file if save_file=True, else None
+        """
+        from .utils.export import export_eps
+        
+        if save_file:
+            self.logger.info(f"Exporting EPS to {self.results_folder}/{file_name}.eps")
+            create_folder(self.results_folder)
+            export_eps(self, f"{self.results_folder}/{file_name}.eps")
+            return f"{self.results_folder}/{file_name}.eps"
+        else:
+            export_eps(self, file_name)
+            return file_name
+    
+    def apply_image_colors(self, image_path: str, num_colors: int = 10, method: str = 'kmeans'):
+        """
+        Apply colors extracted from an image to the wordcloud.
+        
+        Args:
+            image_path: Path to the image file
+            num_colors: Number of colors to extract
+            method: Extraction method ('kmeans', 'most_common', 'random')
+            
+        Returns:
+            Wordcloud: Self for method chaining
+        """
+        from .utils.color_extraction import map_words_to_image_colors
+        
+        if not self.gen_positions:
+            self.logger.warning("No words generated yet. Call generate() first.")
+            return self
+        
+        # Get words from gen_positions
+        words = [word for (word, _, _), _, _, _, _, _ in self.gen_positions]
+        
+        # Map words to colors
+        word_colors = map_words_to_image_colors(words, image_path, num_colors, method, frequency_based=True)
+        
+        # Update colors
+        self.update_colors(word_colors)
+        
+        self.logger.info(f"Applied {num_colors} colors from image: {image_path}")
+        return self
+    
+    def optimize_memory(self):
+        """
+        Optimize memory usage by clearing unnecessary caches and data.
+        
+        Returns:
+            Wordcloud: Self for method chaining
+        """
+        from .utils.performance_optimizations import optimize_memory_usage
+        
+        optimize_memory_usage(self)
+        return self
+    
+    def apply_semantic_clustering(
+        self,
+        method: str = 'tfidf',
+        num_clusters: Optional[int] = None,
+        cluster_layout: str = 'grouped',
+        apply_cluster_colors: bool = True,
+        color_theme: str = 'viridis'
+    ):
+        """
+        Apply semantic clustering to words and rearrange them.
+        
+        Args:
+            method: Clustering method ('tfidf', 'similarity')
+            num_clusters: Number of clusters (auto-determined if None)
+            cluster_layout: Layout strategy ('grouped', 'interleaved', 'sorted')
+            apply_cluster_colors: Whether to color words by cluster
+            color_theme: Color theme for cluster colors
+            
+        Returns:
+            Wordcloud: Self for method chaining
+        """
+        from .utils.semantic_clustering import (
+            cluster_words_tfidf, cluster_words_similarity,
+            arrange_words_by_cluster, get_cluster_colors
+        )
+        
+        if not self.gen_positions:
+            self.logger.warning("No words generated yet. Call generate() first.")
+            return self
+        
+        # Extract words and frequencies
+        words = [word for (word, _, _), _, _, _, _, _ in self.gen_positions]
+        frequencies = [freq for (_, freq, _), _, _, _, _, _ in self.gen_positions]
+        original_freqs = [count for (_, _, count), _, _, _, _, _ in self.gen_positions]
+        
+        # Cluster words
+        if method == 'tfidf':
+            try:
+                clusters = cluster_words_tfidf(words, frequencies, num_clusters)
+            except RuntimeError as e:
+                self.logger.warning(f"TF-IDF clustering failed: {e}, falling back to similarity")
+                clusters = cluster_words_similarity(words)
+        else:  # similarity
+            clusters = cluster_words_similarity(words)
+        
+        # Rearrange words
+        word_tuples = list(zip(words, frequencies, original_freqs))
+        rearranged = arrange_words_by_cluster(word_tuples, clusters, cluster_layout)
+        
+        # Rebuild gen_positions with new order
+        # Create mapping from word to original position data
+        position_map = {
+            word: (font_path, font_size, position, orientation, color)
+            for (word, _, _), font_path, font_size, position, orientation, color in self.gen_positions
+        }
+        
+        new_gen_positions = []
+        for word, freq, count in rearranged:
+            if word in position_map:
+                font_path, font_size, position, orientation, color = position_map[word]
+                new_gen_positions.append(((word, freq, count), font_path, font_size, position, orientation, color))
+        
+        self.gen_positions = new_gen_positions
+        
+        # Apply cluster colors if requested
+        if apply_cluster_colors:
+            cluster_word_colors = get_cluster_colors(clusters, color_theme)
+            self.update_colors(cluster_word_colors)
+        
+        self.logger.info(f"Applied semantic clustering: {len(set(clusters.values()))} clusters")
+        return self
+    
+    @classmethod
+    def from_preset(cls, preset_name: str, **overrides):
+        """
+        Create a Wordcloud instance from a preset.
+        
+        Args:
+            preset_name: Name of the preset
+            **overrides: Parameters to override in the preset
+            
+        Returns:
+            Wordcloud instance
+            
+        Example:
+            >>> wc = Wordcloud.from_preset('minimal')
+            >>> wc.generate("Your text here")
+        """
+        from .utils.presets import get_preset, list_presets
+        
+        preset = get_preset(preset_name)
+        if not preset:
+            available = ', '.join(list_presets())
+            raise ValueError(f"Preset '{preset_name}' not found. Available: {available}")
+        
+        # Merge preset with overrides
+        params = {**preset, **overrides}
+        
+        return cls(**params)
+    
+    def save_as_preset(self, name: str):
+        """
+        Save current wordcloud configuration as a preset.
+        
+        Args:
+            name: Preset name
+            
+        Returns:
+            Wordcloud: Self for method chaining
+        """
+        from .utils.presets import _preset_manager
+        
+        _preset_manager.create_preset_from_wordcloud(self, name)
+        self.logger.info(f"Saved current configuration as preset: {name}")
+        return self

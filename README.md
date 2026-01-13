@@ -7,28 +7,27 @@ A flexible and powerful Python library for creating visually appealing word clou
 
 - **Text Processing**: Extract and analyze word frequencies from any text
 - **Customizable Appearance**: Control fonts, colors, sizes, and margins
-- **Multiple Placement Strategies**: Various algorithms for positioning words including:
-  - Random placement
-  - Archimedean spirals (forward and reverse)
-  - Rectangular spirals (forward and reverse)
-  - KD-Tree optimization
-  - Quad-Tree optimization
-  - PyTagCloud inspired spirals
-- **Multiple Export Formats**:
-  - PNG images
-  - SVG vector graphics
-  - Interactive HTML with tooltips showing word counts
-- **Advanced Customization**: Fine-tune font sizes, word counts, colors, and more
+- **Mask Support**: Constrain placement to custom shapes with binary masks
+- **Placement Strategies**: Random, Archimedean/rectangular spirals, KD-Tree, Quad-Tree, PyTag-inspired
+- **Exports**: PNG, SVG, HTML; matplotlib display
+- **Helpers**: Color themes/gradients, sentiment and length-based coloring
+- **CLI & API**: Minimal CLI and optional Flask API
+
+## Documentation
+
+- Examples: `examples/README.md`
+- Benchmarks: `docs/benchmarks.md`
 
 ## Installation
 
-```bash
+"""
+bash
 pip install wordcloud
-```
+"""
 
 ## Quick Start
 
-```python
+"""python
 from wordcloud import Wordcloud
 
 # Create a wordcloud instance
@@ -41,13 +40,13 @@ wc.generate("Your text goes here...").draw_plt_image()
 
 # Save the wordcloud as an image
 wc.draw_image(save_file=True, image_name="my_wordcloud")
-```
+"""
 
 ## Usage Examples
 
 ### Basic Word Cloud
 
-```python
+"""python
 from wordcloud import Wordcloud
 
 # Create a simple word cloud from a text string
@@ -56,11 +55,11 @@ text = "Python is an amazing programming language for data analysis, machine lea
 wc = Wordcloud()
 wc.generate(text)
 wc.draw_plt_image()  # Display the wordcloud
-```
+"""
 
 ### Customized Word Cloud
 
-```python
+"""python
 from wordcloud import Wordcloud
 
 # Create a customized word cloud
@@ -82,11 +81,41 @@ with open("sample_text.txt", "r") as f:
 
 wc.generate(text)
 wc.draw_image(save_file=True, image_name="custom_wordcloud")
-```
+"""
+
+### Masked Word Cloud
+
+"""python
+import numpy as np
+from wordcloud import Wordcloud
+
+# Build a circular mask (1 = allowed, 0 = blocked)
+radius = 150
+y, x = np.ogrid[-radius:radius, -radius:radius]
+mask = (x * x + y * y <= radius * radius).astype(np.uint8)
+
+wc = Wordcloud(width=300, height=300, mask_image=mask, background_color="white")
+wc.generate("Masked word cloud example").draw_image(save_file=True, image_name="masked_wordcloud")
+"""
+
+### CLI Usage
+
+"""bash
+wordcloud --text "hello world from cli" --output Results/cli_example.png --width 400 --height 200
+"""
+
+### API (optional, requires Flask)
+
+"""bash
+python -c "from wordcloud.api import run_api; run_api(port=5001)"
+# In another shell:
+curl -X POST http://localhost:5001/api/generate -H "Content-Type: application/json" -d '{"text":"hello api"}'
+"""
 
 ### Interactive HTML Word Cloud
 
-```python
+"""
+python
 from wordcloud import Wordcloud
 
 # Create a word cloud and export as interactive HTML
@@ -98,7 +127,31 @@ svg_content = wc.generate_svg()
 
 # Create HTML with the SVG and interactive tooltips
 html_content = wc.create_html(svg_content, save_file=True, file_name="interactive_wordcloud")
-```
+"""
+
+### Rotation / Orientation
+
+Words can be rotated by 90 degrees (vertical text).
+
+"""
+python
+from wordcloud import Wordcloud
+
+wc = Wordcloud(
+    width=800,
+    height=500,
+    prefer_horizontal=0.7,   # 70% of words stay horizontal
+    rotation_angles=(90, -90),
+)
+wc.generate("Rotation example").draw_image(save_file=True, image_name="rotation_example")
+"""
+
+CLI rotation:
+
+"""
+bash
+wordcloud --text "rotation example" --output Results/rot.png --prefer-horizontal 0.7 --rotate-angles "90,-90"
+"""
 
 ## Word Placement Strategies
 
@@ -116,10 +169,10 @@ The `place_strategy` parameter controls how words are positioned in the cloud:
 - `"pytag_reverse"`: Reverse PyTagCloud spiral
 
 Example:
-```python
+"""python
 # Create a wordcloud with an Archimedean spiral layout
 wc = Wordcloud(place_strategy="archimedian")
-```
+"""
 
 ## API Reference
 
@@ -162,16 +215,17 @@ Main class for generating wordclouds from text.
 
 ### Using Context Managers
 
-```python
+"""
+python
 # Use the wordcloud as a context manager
 with Wordcloud(width=800, height=400) as wc:
     wc.generate("Text for the wordcloud...")
     wc.draw_image(save_file=True)
-```
+"""
 
 ### Updating Colors
 
-```python
+"""python
 # Create basic wordcloud
 wc = Wordcloud()
 wc.generate("Text for the wordcloud...")
@@ -187,11 +241,11 @@ word_colors = {
     "data": "green"
 }
 wc.update_colors(word_colors)
-```
+"""
 
 ### Updating Positions with New Fonts
 
-```python
+"""python
 # Create a wordcloud
 wc = Wordcloud()
 wc.generate("Text for the wordcloud...")
@@ -199,7 +253,7 @@ wc.generate("Text for the wordcloud...")
 # Update positions with new fonts
 new_fonts = ["fonts/OpenSans-Bold.ttf", "fonts/Roboto-Regular.ttf"]
 wc.update_position(new_fonts)
-```
+"""
 
 ## About This Project
 

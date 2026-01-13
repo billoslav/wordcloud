@@ -9,11 +9,18 @@ import math
 import time
 
 from .logging_config import get_logger
+from .helpers import create_folder, create_tracking_structure
+from pathlib import Path
 
 logger = get_logger(__name__)
 
 # Define available placement strategies
-STRATEGIES = ["random", "brute", "archimedian", "rectangular", "archimedian_reverse", "rectangular_reverse", "KDTree", "quad", "pytag", "pytag_reverse"]
+STRATEGIES = [
+    "random", "brute", "archimedian", "rectangular", 
+    "archimedian_reverse", "rectangular_reverse", 
+    "KDTree", "quad", "pytag", "pytag_reverse",
+    "circular", "hierarchical", "grid", "force_directed"
+]
 
 class IntegralImage:
     """
@@ -57,6 +64,7 @@ class IntegralImage:
         self.structure_created = False
         self.directory_name = os.getcwd() + "/Tracking"
         self.mask = mask  # Optional mask processor with is_position_available
+        self._tracer = None  # Optional Tracer instance from trace_utils
 
         # We are not using any mask, so the initial Image is filled with zeros
         self.integral = np.zeros((height, width), dtype=np.uint64)
@@ -98,8 +106,9 @@ class IntegralImage:
 
         free_locations = []
 
-        # Setup tracing if enabled
-        if self.tracing: self.tracing_setup(size_x, size_y, place_strategy, word_to_write)
+        # Setup tracing if enabled (use Tracer if available, otherwise internal tracing)
+        if self.tracing:
+            self.tracing_setup(size_x, size_y, place_strategy, word_to_write)
 
         # Find all free locations
         for line_y in range(height - size_y):
@@ -191,14 +200,20 @@ class IntegralImage:
         Draw a point on the tracking image for visualization.
         
         Used during debugging to visualize the path taken by placement strategies.
-        Only has an effect if tracing is enabled.
+        Only has an effect if tracing is enabled. Uses Tracer from trace_utils if available,
+        otherwise falls back to internal tracing.
         
         Args:
             pos_x (int): X-coordinate of the point to draw
             pos_y (int): Y-coordinate of the point to draw
         """
         if self.tracing:
-            self.track_draw.point([(pos_x + self.half_trace_margin, pos_y + self.half_trace_margin)], fill="red")
+            # Use Tracer if available (unified tracing system)
+            if self._tracer is not None and self._tracer.is_active:
+                self._tracer.draw_point(pos_x, pos_y, color="red")
+            # Fall back to internal tracing
+            elif hasattr(self, 'track_draw'): # TODO: why hasattr?
+                self.track_draw.point([(pos_x + self.half_trace_margin, pos_y + self.half_trace_margin)], fill="red")
 
     def save_trace_img(self):
         """
@@ -206,9 +221,15 @@ class IntegralImage:
         
         Only has an effect if tracing is enabled. The image shows the path
         taken by the placement strategy when finding a position for a word.
+        Uses Tracer from trace_utils if available, otherwise falls back to internal tracing.
         """
-        if self.tracing:
-            self.tracking_img.save(self.trace_img_name)
+        if self.tracing: #TODO: saving the file twice??
+            # Always save to the expected trace_img_name format for backward compatibility
+            if hasattr(self, 'tracking_img') and hasattr(self, 'trace_img_name') and self.tracking_img is not None:
+                self.tracking_img.save(self.trace_img_name)
+            # Also save via Tracer if available (for unified tracing system)
+            if self._tracer is not None and self._tracer.is_active:
+                self._tracer.save()
 
 
     
@@ -496,13 +517,22 @@ class IntegralImage:
         direction = directions[0]
         spl = 1
 
+        self.draw_trace_point(width_x, height_y)
+        if (width_x, height_y) in free_locations:
+            self.save_trace_img()
+            return width_x, height_y
+
         while spl <= max(self.height, self.width):
+            if self.check_bounds(width_x, height_y, size_x, size_y):
+                break
+
             for step in range(spl * 2):
                 if step == spl:
                     direction = directions[(spl - 1) % 4]
 
                 width_x += direction[0] * self.DEFAULT_STEP
                 height_y += direction[1] * self.DEFAULT_STEP
+
                 self.draw_trace_point(width_x, height_y)
 
                 if (width_x, height_y) in free_locations:
@@ -570,47 +600,6 @@ class IntegralImage:
 
         self.integral[y:, x:] = recomputed
 
-    def create_folder(self, folder_name, parent_name=""):
-        """
-        Create a directory if it doesn't exist.
-        
-        Creates a folder at the specified path, handling potential errors gracefully.
-        This method is used for creating folders for tracing images and results.
-        
-        Args:
-            folder_name (str): Name of the folder to create
-            parent_name (str, optional): Parent directory where folder should be created.
-                Defaults to empty string (create in current directory).
-                
-        Notes:
-            - Uses os.makedirs with exist_ok=True to avoid race conditions
-            - Logs status messages about folder creation or errors
-        """
-        path = os.path.join(parent_name, folder_name) if parent_name else folder_name
-        try:
-            os.makedirs(path, exist_ok=True)
-            logger.debug(f"Directory '{path}' created/already exists.")
-        except OSError as e:
-            logger.error(f"Error creating directory '{path}': {e}")
-
-    def create_tracking_structure(self, directory, place_strategy):
-        """
-        Create the directory structure for tracing images.
-        
-        Sets up the necessary directories for storing tracing images,
-        organized by strategy name.
-        
-        Args:
-            directory (str): Base directory for tracking images
-            place_strategy (str): Name of the placement strategy
-            
-        Returns:
-            str: Path to the directory where tracing images will be stored
-        """
-        self.create_folder(directory)
-        self.create_folder(place_strategy, directory)
-        
-        return f"{directory}/{place_strategy}/"
     
     def tracing_setup(self, size_x, size_y, place_strategy, word_to_write):
         """
@@ -619,6 +608,9 @@ class IntegralImage:
         Creates a new tracing image and prepares it for recording the path taken
         by the placement strategy. This is useful for debugging and understanding
         how different strategies work.
+        
+        Attempts to use Tracer from trace_utils for unified tracing system.
+        Falls back to internal tracing if Tracer is not available or setup fails.
         
         Args:
             size_x (int): Width of the word's bounding box
@@ -630,20 +622,100 @@ class IntegralImage:
             - The tracing image shows the boundaries of the integral image
             - Red lines indicate the word size constraints
             - Red dots show the path taken by the placement strategy
+            - Uses Tracer from trace_utils when available for consistency
         """
-        if self.structure_created:
+        # Try to use Tracer from trace_utils (unified tracing system)
+        # Lazy import to avoid circular dependency
+        # Note: We still set up internal tracing attributes for backward compatibility
+        try:
+            from .trace_utils import Tracer
+            
+            base_tracking_dir = Path(self.directory_name)
+            word_info = (word_to_write, 0.0, 0)  # (word, freq, count) - freq/count not needed for tracing
+            word_size = (size_x, size_y)
+            mask_array = None
+            if self.mask is not None and hasattr(self.mask, 'mask'):
+                mask_array = self.mask.mask
+            
+            self._tracer = Tracer()
+            self._tracer.setup(
+                canvas_width=self.width,
+                canvas_height=self.height,
+                base_tracking_dir=base_tracking_dir,
+                place_strategy=place_strategy,
+                word_info=word_info,
+                word_size=word_size,
+                mask_array=mask_array
+            )
+            # Set internal attributes for backward compatibility with tests and existing code
+            if self._tracer.trace_img is not None:
+                self.tracking_img = self._tracer.trace_img
+                self.track_draw = self._tracer.trace_draw
+            
+            # Set up tracking path structure
+            if not self.structure_created:
+                strategy_dir = create_tracking_structure(self.directory_name, place_strategy)
+                tracking_path = f"{strategy_dir}/"
+                self.structure_created = True
+            else:
                 tracking_path = f"{self.directory_name}/{place_strategy}/"
-        else:
-            tracking_path = self.create_tracking_structure(self.directory_name, place_strategy)
-            self.structure_created = True
+            
+            # Set trace_img_name in expected format for backward compatibility
+            # Use internal format even if Tracer was used (tests expect this format)
+            self.trace_img_name = f"{tracking_path}tracing_{word_to_write}_{time.time()}.png"
+            
+            logger.debug(f"Using Tracer from trace_utils for tracing")
+            # Don't return - ensure internal format is always set up for backward compatibility
+        except Exception as e:
+            logger.debug(f"Failed to setup Tracer, falling back to internal tracing: {e}")
+            self._tracer = None
+        
+        # Set up internal tracing (either as fallback or for backward compatibility)
+        if not hasattr(self, 'tracking_img') or self.tracking_img is None:
+            if not self.structure_created:
+                strategy_dir = create_tracking_structure(self.directory_name, place_strategy)
+                tracking_path = f"{strategy_dir}/"
+                self.structure_created = True
+            else:
+                tracking_path = f"{self.directory_name}/{place_strategy}/"
 
-        self.tracking_img = Image.new("L", (self.width + self.trace_margin, self.height + self.trace_margin), color="white")
-        self.track_draw = ImageDraw.Draw(self.tracking_img)
+            self.tracking_img = Image.new("L", (self.width + self.trace_margin, self.height + self.trace_margin), color="white")
+            self.track_draw = ImageDraw.Draw(self.tracking_img)
 
-        self.track_draw.rectangle([(self.half_trace_margin, self.half_trace_margin), ((self.width + self.half_trace_margin, self.height + self.half_trace_margin))], fill=None, outline=None, width=1)
-        self.track_draw.line([(self.width + self.half_trace_margin - size_x, 0), (self.width + self.half_trace_margin - size_x, self.height + self.trace_margin)], fill="red", width=1, joint=None)
-        self.track_draw.line([(0, self.height + self.half_trace_margin - size_y), (self.width + self.trace_margin, self.height + self.half_trace_margin - size_y)], fill="red", width=1, joint=None)
-        self.trace_img_name = f"{tracking_path}tracing-{word_to_write}-{time.time()}.png"
+            self.track_draw.rectangle([(self.half_trace_margin, self.half_trace_margin), ((self.width + self.half_trace_margin, self.height + self.half_trace_margin))], fill=None, outline=None, width=1)
+            self.track_draw.line([(self.width + self.half_trace_margin - size_x, 0), (self.width + self.half_trace_margin - size_x, self.height + self.trace_margin)], fill="red", width=1, joint=None)
+            self.track_draw.line([(0, self.height + self.half_trace_margin - size_y), (self.width + self.trace_margin, self.height + self.half_trace_margin - size_y)], fill="red", width=1, joint=None)
+        
+        # Ensure trace_img_name is set in expected format
+        if not hasattr(self, 'trace_img_name') or self.trace_img_name is None:
+            if not self.structure_created:
+                strategy_dir = create_tracking_structure(self.directory_name, place_strategy)
+                tracking_path = f"{strategy_dir}/"
+                self.structure_created = True
+            else:
+                tracking_path = f"{self.directory_name}/{place_strategy}/"
+            self.trace_img_name = f"{tracking_path}tracing_{word_to_write}_{time.time()}.png"
+    
+    def create_folder(self, path, parents=True):
+        """
+        Create a folder (for backward compatibility with tests).
+        
+        This method delegates to the create_folder helper function.
+        """
+        from .helpers import create_folder
+        return create_folder(path, parents=parents)
+    
+    def create_tracking_structure(self, base_dir, strategy):
+        """
+        Create tracking structure (for backward compatibility with tests).
+
+        This method delegates to the create_tracking_structure helper function.
+        Returns a string path ending with '/' for backward compatibility with tests.
+        """
+        from .helpers import create_tracking_structure
+        result = create_tracking_structure(base_dir, strategy)
+        # Return string path ending with '/' for backward compatibility with tests
+        return f"{result}/"
 
 
 # --- Static Integral Image for mask-based availability checks ---
