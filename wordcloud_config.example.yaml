@@ -1,0 +1,105 @@
+# WordCloud Configuration File Example
+# 
+# This file demonstrates all available configuration options for the WordCloud library.
+# Copy this file to wordcloud_config.yaml in your project directory or to
+# ~/.config/wordcloud/config.yaml for user-wide settings.
+#
+# Configuration can also be set via environment variables prefixed with WORDCLOUD_
+# Example: WORDCLOUD_WORDCLOUD_WIDTH=1000
+
+# WordCloud generation settings
+wordcloud:
+  # Canvas dimensions (in pixels)
+  width: 800
+  height: 500
+  
+  # Font settings
+  font_path: "fonts/Arial Unicode.ttf"  # Path to TrueType font file
+  min_font_size: 14                     # Minimum font size in points
+  max_font_size: 80                     # Maximum font size in points (None for auto)
+  font_step: 2                          # Step size for decreasing font size during placement
+  
+  # Text processing
+  max_words: 200                         # Maximum number of words to include
+  min_word_length: 3                    # Minimum length of words to include
+  # stopwords: []                        # List of words to exclude (not in config, set programmatically)
+  
+  # Layout and spacing
+  margin: 2                              # Margin between words in pixels
+  place_strategy: "random"               # Placement strategy (see available strategies below)
+  
+  # Available placement strategies:
+  # - "random": Random placement
+  # - "brute": Brute force systematic search
+  # - "archimedian": Archimedean spiral (center outward)
+  # - "archimedian_reverse": Archimedean spiral (outside inward)
+  # - "rectangular": Rectangular spiral (center outward)
+  # - "rectangular_reverse": Rectangular spiral (outside inward)
+  # - "KDTree": KD-tree based nearest neighbor placement
+  # - "quad": Quadtree-based placement
+  # - "pytag": Pythagorean spiral (clockwise)
+  # - "pytag_reverse": Pythagorean spiral (counter-clockwise)
+  
+  # Visual appearance
+  background_color: "white"              # Background color (name or hex: "#ffffff")
+  mode: "RGB"                            # Color mode: "RGB", "RGBA", "L", etc.
+  black_white: false                     # Use only black text (overrides color themes)
+  color_theme: null                      # Color theme name (see available themes below)
+  
+  # Available color themes:
+  # - "default": Standard matplotlib colors
+  # - "pastel": Soft pastel colors
+  # - "bright": Vibrant bright colors
+  # - "dark": Darker muted colors
+  # - "viridis": Viridis color scale
+  # - "magma": Magma color scale
+  # - "inferno": Inferno color scale
+  # - "plasma": Plasma color scale
+  # null: Random colors (default)
+  
+  # Advanced options
+  rect_only: false                       # Draw rectangles instead of text (for debugging)
+  tracing_files: false                   # Generate debug tracing files for placement strategies
+  mask_threshold: 200                    # Threshold for mask image processing (0-255)
+  # mask_image: null                     # Path to mask image (not in config, set programmatically)
+  
+  # Note: The following options are available programmatically but not via config file:
+  # - prefer_horizontal: float (0.0-1.0) - Probability of horizontal text orientation
+  # - rotation_angles: tuple[int, ...] - Allowed rotation angles (e.g., (90, -90))
+  # - collision_detector: CollisionDetector - Custom collision detection system
+  # - log_level: int - Logging level (logging.INFO, logging.DEBUG, etc.)
+
+# API server configuration (for Flask API)
+api:
+  host: "127.0.0.1"                      # Host address to bind to
+  port: 5000                             # Port number
+  max_job_age: 3600                      # Maximum age of jobs in seconds before cleanup
+  max_jobs: 100                          # Maximum number of concurrent jobs
+
+# Performance tracking configuration
+performance:
+  enable_tracking: false                 # Enable performance tracking
+  tracking_detail: "basic"               # Detail level: "basic" or "detailed"
+  
+  # Performance tracking provides metrics for:
+  # - Text processing time
+  # - Word placement time
+  # - Overall generation time
+  # - Memory usage (if detailed)
+
+# Output settings
+output:
+  default_format: "png"                  # Default export format: "png", "svg", "html", "pdf"
+  results_folder: "Results"              # Folder name for saving output files (relative to current directory)
+  dpi: 300                               # Dots per inch for raster formats (PNG, PDF)
+
+# Environment Variables Example:
+# You can override any config value using environment variables:
+# 
+# WORDCLOUD_WORDCLOUD_WIDTH=1200
+# WORDCLOUD_WORDCLOUD_HEIGHT=800
+# WORDCLOUD_WORDCLOUD_PLACE_STRATEGY=rectangular
+# WORDCLOUD_WORDCLOUD_COLOR_THEME=viridis
+# WORDCLOUD_PERFORMANCE_ENABLE_TRACKING=true
+# WORDCLOUD_OUTPUT_RESULTS_FOLDER=MyResults
+

@@ -1,0 +1,16 @@
+# Core dependencies
+numpy
+Pillow
+matplotlib
+
+# Optional dependencies for enhanced functionality
+scikit-learn
+gensim
+# cupy  # CUDA GPU computing - not available on macOS
+pyopencl
+reportlab
+flask
+PyYAML
+
+# Development and testing
+pytest

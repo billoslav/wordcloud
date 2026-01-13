@@ -1,0 +1,44 @@
+use _bootstrap in all examples folder
+use _text_sources in all examples folder
+revisit the examples folder as a whole
+
+revisit and run benchmarks folder
+
+go thru tests
+ - take a look at the skipped tests and why are they skipped
+
+revisit whole wordcloud file
+ - word orientation
+ - if mask -> use mask size
+ - font cache
+ - k cemu je _choose_orientation_degrees?
+ 
+revisit whole integral image file
+
+check collision
+check config
+check export
+check font_utils
+check logging_config
+check mask
+check performance
+check placement
+check text_processing
+check trace_utils
+check visualization
+
+check api.py
+check cli.py
+
+check ARCHITECTURE.md
+
+check setup.py
+
+check the rest 
+ - conftest
+ - main (as example, add some mask, etc.)
+ - pytest.ini
+ - setup.py
+ - README.md
+
+take a look at Docs folder
