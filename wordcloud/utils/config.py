@@ -62,6 +62,15 @@ DEFAULT_CONFIG = {
     "performance": {
         "enable_tracking": False,
         "tracking_detail": "basic",
+        "cache": {
+            "lru_max_size": 128,
+            "lru_max_age_seconds": None,
+            "disk_cache_dir": None,
+            "disk_max_entries": 1000,
+            "disk_max_size_bytes": 500_000_000,
+            "disk_max_age_seconds": 604800,
+            "disk_cleanup_interval_seconds": 600,
+        },
     },
     "output": {
         "default_format": "png",

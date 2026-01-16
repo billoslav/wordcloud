@@ -12,6 +12,7 @@ from pathlib import Path
 from wordcloud import Wordcloud
 from wordcloud.utils import STRATEGIES
 from wordcloud.utils.visualization import COLOR_THEMES
+from wordcloud.utils.export import export_batch, normalize_export_formats, SUPPORTED_EXPORT_FORMATS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,6 +29,9 @@ Examples:
 
   # Use color theme and placement strategy
   wordcloud --file input.txt --color-theme viridis --strategy rectangular --output cloud.png
+
+  # Export multiple formats
+  wordcloud --file input.txt --formats png,svg,html --output Results/cloud
         """.strip()
     )
     
@@ -49,6 +53,10 @@ Examples:
         type=Path,
         default="wordcloud.png",
         help="Output file path (default: wordcloud.png)"
+    )
+    parser.add_argument(
+        "--formats",
+        help=f"Comma-separated output formats (e.g. png,svg,html). Supported: {', '.join(sorted(SUPPORTED_EXPORT_FORMATS))}"
     )
     
     # Image dimensions
@@ -239,6 +247,12 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     if not font_path.exists():
         parser.error(f"Font file not found: {args.font_path}")
 
+    if args.formats:
+        try:
+            parse_formats(args.formats, args.output)
+        except ValueError as e:
+            parser.error(str(e))
+
 
 def parse_rotate_angles(value: str) -> tuple[int, ...]:
     """Parse comma-separated rotation angles into a tuple of ints."""
@@ -274,6 +288,15 @@ def parse_stopwords(stopwords_str: str | None) -> list[str]:
     if not stopwords_str:
         return []
     return [word.strip().lower() for word in stopwords_str.split(",") if word.strip()]
+
+
+def parse_formats(formats_str: str | None, output_path: Path) -> list[str]:
+    if formats_str:
+        formats = formats_str.split(",")
+        return normalize_export_formats(formats)
+    if output_path.suffix:
+        return normalize_export_formats([output_path.suffix.lstrip(".")])
+    return ["png"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -339,13 +362,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         
         wc.generate(text, color_theme=(args.color_theme if not args.black_white else None))
-        
-        img = wc.draw_image(save_file=False)
-        from wordcloud.utils.helpers import ensure_parent_dir
-        output_path = ensure_parent_dir(args.output)
-        img.save(output_path)
-        
-        print(f"Wordcloud saved to: {output_path.resolve()}")
+
+        formats = parse_formats(args.formats, args.output)
+        results = export_batch(wc, args.output, formats)
+        for fmt, path in results.items():
+            print(f"{fmt.upper()} saved to: {path.resolve()}")
         return 0
         
     except Exception as e:

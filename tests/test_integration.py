@@ -42,6 +42,44 @@ class TestBasicWordcloudGeneration:
         
         assert wc.gen_positions is not None
         assert len(wc.gen_positions) > 0
+
+    def test_deterministic_generation_with_seed(self, sample_text, font_path):
+        """Test deterministic output when random_state is set."""
+        wc_first = Wordcloud(
+            width=400,
+            height=200,
+            font_path=font_path,
+            place_strategy="random",
+            random_state=42,
+            prefer_horizontal=0.0,
+        )
+        wc_first.generate(sample_text)
+
+        wc_second = Wordcloud(
+            width=400,
+            height=200,
+            font_path=font_path,
+            place_strategy="random",
+            random_state=42,
+            prefer_horizontal=0.0,
+        )
+        wc_second.generate(sample_text)
+
+        assert wc_first.gen_positions == wc_second.gen_positions
+
+        wc_third = Wordcloud(
+            width=400,
+            height=200,
+            font_path=font_path,
+            place_strategy="random",
+            random_state=43,
+            prefer_horizontal=0.0,
+        )
+        wc_third.generate(sample_text)
+
+        first_colors = [entry[-1] for entry in wc_first.gen_positions]
+        third_colors = [entry[-1] for entry in wc_third.gen_positions]
+        assert first_colors != third_colors
     
     def test_draw_image(self, sample_text, font_path):
         """Test drawing wordcloud as image."""
@@ -85,6 +123,29 @@ class TestBasicWordcloudGeneration:
         assert html is not None
         assert '<!DOCTYPE html>' in html
         assert '</html>' in html
+
+    def test_interactive_html_controls(self, sample_text, font_path):
+        """Test interactive HTML includes search and zoom controls."""
+        wc = Wordcloud(width=400, height=200, font_path=font_path)
+        wc.generate(sample_text)
+
+        html = wc.create_html(interactive=True, save_file=False)
+
+        assert 'id="wordcloud-svg"' in html
+        assert 'id="zoom-range"' in html
+        assert 'id="search-input"' in html
+
+    def test_generate_from_stream_matches_generate(self, sample_text, font_path):
+        """Test streaming generation matches regular generation."""
+        chunks = [sample_text[:120], sample_text[120:]]
+
+        wc_full = Wordcloud(width=400, height=200, font_path=font_path, random_state=123)
+        wc_full.generate(sample_text)
+
+        wc_stream = Wordcloud(width=400, height=200, font_path=font_path, random_state=123)
+        wc_stream.generate_from_stream(chunks)
+
+        assert wc_full.gen_positions == wc_stream.gen_positions
 
 
 class TestPlacementStrategies:

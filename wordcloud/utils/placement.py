@@ -9,13 +9,57 @@ from __future__ import annotations
 
 import random
 import math
-from typing import Callable, Optional, Tuple, List
+from typing import Callable, Optional, Tuple, List, Dict, Protocol, Set, TYPE_CHECKING
 
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
 
 IsValidPosition = Callable[[int, int, int, int], bool]  # y, x, height, width -> bool
+if TYPE_CHECKING:
+    from .integral_image import IntegralImage
+
+
+class PlacementStrategy(Protocol):
+    def __call__(
+        self,
+        integral_image: "IntegralImage",
+        free_locations: Set[Tuple[int, int]],
+        width_x: int,
+        height_y: int,
+        size_x: int,
+        size_y: int,
+    ) -> Optional[Tuple[int, int]]:
+        ...
+
+
+_CUSTOM_STRATEGIES: Dict[str, PlacementStrategy] = {}
+
+
+def register_placement_strategy(name: str, strategy: PlacementStrategy) -> None:
+    if not name:
+        raise ValueError("Strategy name must be a non-empty string")
+    from .integral_image import STRATEGIES
+    if name in STRATEGIES or name in _CUSTOM_STRATEGIES:
+        raise ValueError(f"Strategy '{name}' is already registered")
+    _CUSTOM_STRATEGIES[name] = strategy
+    STRATEGIES.append(name)
+
+
+def unregister_placement_strategy(name: str) -> None:
+    from .integral_image import STRATEGIES
+    if name in _CUSTOM_STRATEGIES:
+        del _CUSTOM_STRATEGIES[name]
+    if name in STRATEGIES:
+        STRATEGIES.remove(name)
+
+
+def get_placement_strategy(name: str) -> Optional[PlacementStrategy]:
+    return _CUSTOM_STRATEGIES.get(name)
+
+
+def list_custom_placement_strategies() -> List[str]:
+    return sorted(_CUSTOM_STRATEGIES.keys())
 
 DEFAULT_STEP = 2
 
@@ -28,6 +72,7 @@ def find_position_random(
     is_valid_position: IsValidPosition,
     tracer: Optional[object] = None,
     max_attempts: int = 1000,
+    rng: Optional[random.Random] = None,
 ) -> Optional[Tuple[int, int]]:
     """
     Sample random positions until a valid spot is found or attempts are exhausted.
@@ -37,9 +82,10 @@ def find_position_random(
         return None
 
     logger.debug(f"Attempting random placement for size {word_width}x{word_height} (max {max_attempts} attempts)")
+    rng = rng or random
     for attempt in range(max_attempts):
-        pos_x = random.randint(0, canvas_width - word_width)
-        pos_y = random.randint(0, canvas_height - word_height)
+        pos_x = rng.randint(0, canvas_width - word_width)
+        pos_y = rng.randint(0, canvas_height - word_height)
 
         if tracer and getattr(tracer, "is_active", False):
             tracer.draw_point(pos_x, pos_y, color="blue")

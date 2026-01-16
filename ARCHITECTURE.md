@@ -5,78 +5,78 @@ This document provides a comprehensive overview of the WordCloud project archite
 ## System Architecture Diagram
 
 ```mermaid
-graph TB
-    subgraph Entry["Entry Points"]
-        CLI["CLI Interface<br/>wordcloud/cli.py"]
-        API["REST API Server<br/>wordcloud/api.py"]
-        PYTHON["Python API<br/>wordcloud/__init__.py"]
-        MAIN["Main Script<br/>main.py"]
+flowchart TB
+    subgraph EntryPoints[Entry Points]
+        CLI["CLI Interface (wordcloud/cli.py)"]
+        API["REST API Server (wordcloud/api.py)"]
+        PythonAPI["Python API (wordcloud/__init__.py)"]
+        MainScript["Main Script (main.py)"]
     end
 
-    subgraph Core["Core Components"]
-        WC["Wordcloud Class<br/>wordcloud/wordcloud.py"]
+    subgraph Core[Core Components]
+        WC["Wordcloud Class (wordcloud/wordcloud.py)"]
     end
 
-    subgraph TextProc["Text Processing"]
-        TP["TextProcessor<br/>utils/text_processing.py"]
+    subgraph TextProc[Text Processing]
+        TP["TextProcessor (utils/text_processing.py)"]
     end
 
-    subgraph Placement["Placement & Collision"]
-        II["IntegralImage<br/>utils/integral_image.py"]
-        CD["CollisionDetector<br/>utils/collision.py"]
-        PLACEMENT["Placement Strategies<br/>utils/placement.py"]
-        STRATEGIES["10 Strategies<br/>random, brute, archimedian,<br/>rectangular, KDTree, quad,<br/>pytag, etc."]
+    subgraph Placement[Placement and Collision]
+        II["IntegralImage (utils/integral_image.py)"]
+        CD["CollisionDetector (utils/collision.py)"]
+        PlacementUtils["Placement Strategies (utils/placement.py)"]
+        StrategyList["Strategies: random, brute, archimedian, rectangular, KDTree, quad, pytag"]
     end
 
-    subgraph Visual["Visualization & Styling"]
-        VIZ["Visualization<br/>utils/visualization.py"]
-        COLOR["Color Themes<br/>8 themes + gradients"]
-        MASK["MaskProcessor<br/>utils/mask.py"]
-        FONT["FontCache<br/>utils/font_utils.py"]
+    subgraph Visual[Visualization and Styling]
+        VIZ["Visualization (utils/visualization.py)"]
+        COLOR["Color Themes and Gradients"]
+        MASK["MaskProcessor (utils/mask.py)"]
+        FONT["FontCache (utils/font_utils.py)"]
     end
 
-    subgraph Export["Export & Output"]
-        EXPORT["Export Module<br/>utils/export.py"]
-        PNG["PNG Export"]
-        SVG["SVG Export"]
-        HTML["HTML Export"]
-        PDF["PDF Export<br/>optional"]
-        GIF["Animated GIF<br/>optional"]
+    subgraph Export[Export and Output]
+        EXPORT["Export Module (utils/export.py)"]
+        PNG[PNG Export]
+        SVG[SVG Export]
+        HTML[HTML Export]
+        PDF["PDF Export (optional)"]
+        GIF["Animated GIF (optional)"]
     end
 
-    subgraph Utils["Utilities"]
-        CONFIG["ConfigManager<br/>utils/config.py"]
-        PERF["Performance Tools<br/>utils/performance.py"]
-        LOG["Logging Config<br/>utils/logging_config.py"]
-        TRACE["Trace Utils<br/>utils/trace_utils.py"]
+    subgraph Utils[Utilities]
+        CONFIG["ConfigManager (utils/config.py)"]
+        PERF["Performance Tools (utils/performance.py)"]
+        LOG["Logging Config (utils/logging_config.py)"]
+        TRACE["Trace Utils (utils/trace_utils.py)"]
     end
 
-    subgraph Testing["Testing & Benchmarks"]
-        TESTS["Test Suite<br/>tests/"]
-        BENCH["Benchmarks<br/>benchmarks/"]
-        DOCS["Documentation<br/>docs/"]
+    subgraph Testing[Testing and Benchmarks]
+        TESTS["Test Suite (tests/)"]
+        BENCH["Benchmarks (benchmarks/)"]
+        DOCS["Documentation (docs/)"]
     end
 
-    subgraph External["External Dependencies"]
-        PIL["PIL/Pillow"]
-        NUMPY["NumPy"]
-        MATPLOTLIB["Matplotlib<br/>optional"]
-        FLASK["Flask<br/>optional"]
-        REPORTLAB["ReportLab<br/>optional"]
+    subgraph External[External Dependencies]
+        PIL[PIL or Pillow]
+        NUMPY[NumPy]
+        MATPLOTLIB["Matplotlib (optional)"]
+        FLASK["Flask (optional)"]
+        REPORTLAB["ReportLab (optional)"]
     end
 
     CLI --> WC
     API --> WC
-    PYTHON --> WC
-    MAIN --> WC
+    PythonAPI --> WC
+    MainScript --> WC
 
     WC --> TP
 
     WC --> II
     WC --> CD
-    WC --> PLACEMENT
+    WC --> PlacementUtils
     II --> CD
-    CD --> STRATEGIES
+    CD --> StrategyList
 
     WC --> VIZ
     WC --> MASK
@@ -104,26 +104,6 @@ graph TB
     EXPORT --> MATPLOTLIB
     API --> FLASK
     EXPORT --> REPORTLAB
-
-    classDef entryPoint fill:#e1f5ff,stroke:#01579b,stroke-width:2px
-    classDef core fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    classDef processing fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    classDef placement fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
-    classDef visualization fill:#fce4ec,stroke:#880e4f,stroke-width:2px
-    classDef export fill:#e0f2f1,stroke:#004d40,stroke-width:2px
-    classDef utility fill:#fff9c4,stroke:#f57f17,stroke-width:2px
-    classDef testing fill:#f1f8e9,stroke:#558b2f,stroke-width:2px
-    classDef external fill:#f5f5f5,stroke:#616161,stroke-width:2px
-
-    class CLI,API,PYTHON,MAIN entryPoint
-    class WC core
-    class TP processing
-    class II,CD,PLACEMENT,STRATEGIES placement
-    class VIZ,COLOR,MASK,FONT visualization
-    class EXPORT,PNG,SVG,HTML,PDF,GIF export
-    class CONFIG,PERF,LOG,TRACE utility
-    class TESTS,BENCH,DOCS testing
-    class PIL,NUMPY,MATPLOTLIB,FLASK,REPORTLAB external
 ```
 
 ## Component Descriptions

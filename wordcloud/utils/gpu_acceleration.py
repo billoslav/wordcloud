@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 
 # Try to import GPU libraries
 try:
-    import cupy as cp
+    import cupy as cp # type: ignore
     CUPY_AVAILABLE = True
 except ImportError:
     CUPY_AVAILABLE = False
@@ -35,7 +35,13 @@ class GPUAccelerator:
     """
     GPU acceleration wrapper for wordcloud operations.
     """
-    def __init__(self, backend: str = 'auto'):
+    def __init__(
+        self,
+        backend: str = 'auto',
+        enabled: bool = False,
+        validate_results: bool = True,
+        validation_samples: int = 128,
+    ):
         """
         Initialize GPU accelerator.
         
@@ -47,6 +53,13 @@ class GPUAccelerator:
         self.context = None
         self.queue = None
         self.available = False
+        self.enabled = enabled
+        self.validate_results = validate_results
+        self.validation_samples = validation_samples
+        
+        if not enabled:
+            logger.info("GPU acceleration disabled (opt-in only)")
+            return
         
         if backend == 'auto':
             if CUPY_AVAILABLE:
@@ -134,7 +147,12 @@ class GPUAccelerator:
                         if area == 0:  # No collision
                             valid_positions.append((x, y))
                 
-                return np.array(valid_positions) if valid_positions else None
+                gpu_positions = np.array(valid_positions) if valid_positions else None
+                if self.validate_results and gpu_positions is not None:
+                    if not self._validate_positions(integral_image, gpu_positions, word_width, word_height):
+                        logger.warning("GPU collision results failed validation, falling back to CPU")
+                        return None
+                return gpu_positions
             
             elif self.backend == 'opencl' and OPENCL_AVAILABLE:
                 # OpenCL implementation would go here
@@ -178,6 +196,10 @@ class GPUAccelerator:
                 # position selection based on various criteria
                 
                 # For now, just return original positions
+                if self.validate_results:
+                    if not self._validate_positions_list(positions, word_sizes, canvas_width, canvas_height):
+                        logger.warning("GPU placement results failed validation, falling back to CPU")
+                        return None
                 return positions
             
             elif self.backend == 'opencl' and OPENCL_AVAILABLE:
@@ -189,8 +211,54 @@ class GPUAccelerator:
             logger.warning(f"GPU placement calculation failed: {e}, falling back to CPU")
             return None
 
+    def _validate_positions(
+        self,
+        integral_image: np.ndarray,
+        positions: np.ndarray,
+        word_width: int,
+        word_height: int,
+    ) -> bool:
+        if positions.size == 0:
+            return True
+        max_samples = min(self.validation_samples, len(positions))
+        sample_indices = np.linspace(0, len(positions) - 1, num=max_samples, dtype=int)
+        for idx in sample_indices:
+            x, y = positions[idx]
+            area = (
+                integral_image[y + word_height, x + word_width]
+                - integral_image[y, x + word_width]
+                - integral_image[y + word_height, x]
+                + integral_image[y, x]
+            )
+            if area != 0:
+                return False
+        return True
 
-def create_gpu_accelerator(backend: str = 'auto') -> Optional[GPUAccelerator]:
+    def _validate_positions_list(
+        self,
+        positions: List[Tuple[int, int]],
+        word_sizes: List[Tuple[int, int]],
+        canvas_width: int,
+        canvas_height: int,
+    ) -> bool:
+        if len(positions) != len(word_sizes):
+            return False
+        max_samples = min(self.validation_samples, len(positions))
+        sample_indices = np.linspace(0, len(positions) - 1, num=max_samples, dtype=int)
+        for idx in sample_indices:
+            x, y = positions[idx]
+            width, height = word_sizes[idx]
+            if x < 0 or y < 0 or x + width > canvas_width or y + height > canvas_height:
+                return False
+        return True
+
+
+def create_gpu_accelerator(
+    backend: str = 'auto',
+    enabled: bool = False,
+    validate_results: bool = True,
+    validation_samples: int = 128,
+) -> Optional[GPUAccelerator]:
     """
     Create a GPU accelerator instance.
     
@@ -200,6 +268,11 @@ def create_gpu_accelerator(backend: str = 'auto') -> Optional[GPUAccelerator]:
     Returns:
         GPUAccelerator instance or None if not available
     """
-    accelerator = GPUAccelerator(backend=backend)
+    accelerator = GPUAccelerator(
+        backend=backend,
+        enabled=enabled,
+        validate_results=validate_results,
+        validation_samples=validation_samples,
+    )
     return accelerator if accelerator.is_available() else None
 

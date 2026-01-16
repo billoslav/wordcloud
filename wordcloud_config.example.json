@@ -26,7 +26,16 @@
   },
   "performance": {
     "enable_tracking": false,
-    "tracking_detail": "basic"
+    "tracking_detail": "basic",
+    "cache": {
+      "lru_max_size": 128,
+      "lru_max_age_seconds": null,
+      "disk_cache_dir": null,
+      "disk_max_entries": 1000,
+      "disk_max_size_bytes": 500000000,
+      "disk_max_age_seconds": 604800,
+      "disk_cleanup_interval_seconds": 600
+    }
   },
   "output": {
     "default_format": "png",

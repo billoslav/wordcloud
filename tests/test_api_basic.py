@@ -40,3 +40,33 @@ def test_api_generate_and_download(tmp_path):
     assert dl.status_code == 200
     assert dl.mimetype == "image/png"
 
+
+@pytest.mark.skipif(not FLASK_AVAILABLE, reason="Flask not installed")
+def test_api_generate_multiple_formats():
+    app = create_app()
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/generate",
+        json={"text": "hello world", "width": 60, "height": 40, "formats": ["png", "svg"]},
+    )
+    assert resp.status_code == 202
+    job_id = resp.get_json()["job_id"]
+
+    import time
+
+    for _ in range(200):
+        status_resp = client.get(f"/api/status/{job_id}")
+        status = status_resp.get_json()["status"]
+        if status == "completed":
+            break
+        if status == "failed":
+            pytest.fail("Job failed")
+        time.sleep(0.05)
+    else:
+        pytest.fail("Job did not complete")
+
+    dl_svg = client.get(f"/api/download/{job_id}?format=svg")
+    assert dl_svg.status_code == 200
+    assert dl_svg.mimetype == "image/svg+xml"
+

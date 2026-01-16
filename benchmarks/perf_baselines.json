@@ -1,0 +1,29 @@
+{
+  "config": {
+    "height": 500,
+    "max_words": 200,
+    "prefer_horizontal": 1.0,
+    "rotation_angles": [
+      90,
+      -90
+    ],
+    "width": 800
+  },
+  "results": {
+    "archimedian": {
+      "elapsed": 11.081211750017246,
+      "placed_words": 63
+    },
+    "random": {
+      "elapsed": 10.40627454200876,
+      "placed_words": 63
+    },
+    "rectangular": {
+      "elapsed": 11.174954292015173,
+      "placed_words": 63
+    }
+  },
+  "runs": 3,
+  "seed": 42,
+  "tolerance": 0.15
+}

@@ -6,11 +6,12 @@
 - **`tests/`**: pytest tests for the main package.
 - **`examples/`**: small example scripts.
 - **`fonts/`**: bundled fonts used by examples and tests.
+- **`benchmarks/`**: performance benchmark scripts and baselines.
 
 ### `wordcloud/`
 
 - **`wordcloud/__init__.py`**: exports the public API (what users import).
-- **`wordcloud/wordcloud.py`**: main `Wordcloud` class (generate, place, draw, export).
+- **`wordcloud/wordcloud.py`**: main `Wordcloud` class (generate, place, draw, export, deterministic `random_state`).
 - **`wordcloud/cli.py`**: command line interface.
 - **`wordcloud/api.py`**: optional Flask API server.
 
@@ -25,6 +26,7 @@
 - **`export.py`**: PNG, SVG, PDF, GIF, HTML export helpers.
 - **`logging_config.py`**: library logging setup.
 - **`performance.py`**: performance tracking tools.
+- **`perf_regression.py`**: deterministic perf regression helpers.
 - **`trace_utils.py`**: tracing/debug helpers.
 - **`collision.py`**: collision detector utilities.
 - **`config.py`**: config loading and defaults.

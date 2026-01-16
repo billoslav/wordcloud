@@ -1,44 +1,65 @@
-use _bootstrap in all examples folder
-use _text_sources in all examples folder
-revisit the examples folder as a whole
+Revision scope: full repo audit for correctness, structure, pythonic style,
+performance, usability, and documentation clarity.
 
-revisit and run benchmarks folder
+0) Repository inventory and structure
+- Audit folders and categorize files (core, utils, helpers, docs, tests, examples, benchmarks).
+- Consolidate docs into one canonical path: `docs/` (avoid `Docs/`).
+- Confirm consistent folder naming (lowercase, snake_case).
+- Keep generated assets in `Results/` and tracing outputs in `Tracking/`.
+- Keep input sources centralized in `test_sources/` (fonts remain in `fonts/`).
 
-go thru tests
- - take a look at the skipped tests and why are they skipped
+1) Documentation set (root + docs/)
+- Root: README.md, PROJECT_OVERVIEW.md, ARCHITECTURE.md, CONTRIBUTING.md,
+  STYLE_GUIDE.md, TESTING.md, PERFORMANCE.md, CHANGELOG.md, ROADMAP.md,
+  MAINTENANCE.md, SECURITY.md, CODE_OF_CONDUCT.md, GOVERNANCE.md,
+  DOCS_INDEX.md, DECISIONS.md.
+- Docs folder: docs/README.md, docs/benchmarks.md, docs/examples.md, docs/api.md.
+- Ensure docs cross-link to examples, benchmarks, configs, and outputs.
+- Review setup.py and pytest.ini for documentation alignment.
 
-revisit whole wordcloud file
- - word orientation
- - if mask -> use mask size
- - font cache
- - k cemu je _choose_orientation_degrees?
- 
-revisit whole integral image file
+2) Core library review
+- wordcloud/wordcloud.py
+  - orientation logic and rotated text handling.
+  - mask size behavior and warnings.
+  - font cache usage and clearing.
+  - clarify _choose_orientation_degrees usage.
+  - ensure text_processing and export paths use class-based utilities where intended.
+  - remove any macOS-incompatible memory optimization if found.
+  - add missing documentation and invariants.
+- wordcloud/utils/integral_image.py
+  - clarify Static Integral Image usage.
+  - confirm all placement strategies are implemented and reachable.
+  - validate trace points drawing with trace_utils.
 
-check collision
-check config
-check export
-check font_utils
-check logging_config
-check mask
-check performance
-check placement
-check text_processing
-check trace_utils
-check visualization
+3) Utils review (usage, docs, performance, necessity)
+- collision.py, config.py, export.py, font_utils.py, logging_config.py,
+  mask.py, performance.py, placement.py, text_processing.py, trace_utils.py,
+  visualization.py.
 
-check api.py
-check cli.py
+4) Helpers review (usage, docs, performance, necessity)
+- wordcloud/utils/helpers/file_utils.py
+- wordcloud/utils/helpers/path_utils.py
 
-check ARCHITECTURE.md
+5) API/CLI review
+- wordcloud/api.py
+- wordcloud/cli.py
 
-check setup.py
+6) Tests and quality
+- Review tests and list skipped tests with reasons.
+- Add missing scenarios and edge cases, especially around orientation and masks.
 
-check the rest 
- - conftest
- - main (as example, add some mask, etc.)
- - pytest.ini
- - setup.py
- - README.md
+7) Examples and sources
+- Validate usage of examples/_bootstrap.py and examples/_text_sources.py.
+- Revisit all examples and their coverage; add missing scenarios.
+- Generate final visual outputs for examples (no runtime needed).
+- Centralize input sources in test_sources/ (fonts stay in fonts/).
 
-take a look at Docs folder
+8) Benchmarks and performance
+- Re-run benchmarks and save logs to benchmarks/outputs/.
+- Produce summary statistics and publish in docs/benchmarks.md.
+- Review performance tracking example and workflow.
+
+9) Other
+- conftest.py
+- main.py (add example mask or expand usage)
+- Clean up files not in folders if unnecessary.

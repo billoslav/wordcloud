@@ -37,7 +37,8 @@ def extract_colors_from_image(
     image_path: str,
     num_colors: int = 10,
     method: str = 'kmeans',
-    resize_to: Optional[Tuple[int, int]] = None
+    resize_to: Optional[Tuple[int, int]] = None,
+    rng: Optional["np.random.Generator"] = None,
 ) -> List[str]:
     """
     Extract dominant colors from an image.
@@ -82,7 +83,8 @@ def extract_colors_from_image(
             colors = np.array([list(color) for color, _ in most_common])
         else:  # 'random' or fallback
             # Random sampling
-            indices = np.random.choice(len(pixels), size=num_colors, replace=False)
+            rng = rng or np.random.default_rng()
+            indices = rng.choice(len(pixels), size=num_colors, replace=False)
             colors = pixels[indices]
         
         # Convert to hex strings
@@ -99,7 +101,8 @@ def extract_colors_from_image(
 def extract_colors_from_pil_image(
     image: Image.Image,
     num_colors: int = 10,
-    method: str = 'kmeans'
+    method: str = 'kmeans',
+    rng: Optional["np.random.Generator"] = None,
 ) -> List[str]:
     """
     Extract dominant colors from a PIL Image object.
@@ -133,7 +136,8 @@ def extract_colors_from_pil_image(
         most_common = color_counts.most_common(num_colors)
         colors = np.array([list(color) for color, _ in most_common])
     else:  # 'random' or fallback
-        indices = np.random.choice(len(pixels), size=num_colors, replace=False)
+        rng = rng or np.random.default_rng()
+        indices = rng.choice(len(pixels), size=num_colors, replace=False)
         colors = pixels[indices]
     
     # Convert to hex strings
@@ -148,7 +152,8 @@ def map_words_to_image_colors(
     image_path: str,
     num_colors: int = 10,
     method: str = 'kmeans',
-    frequency_based: bool = True
+    frequency_based: bool = True,
+    rng: Optional["np.random.Generator"] = None,
 ) -> Dict[str, str]:
     """
     Map words to colors extracted from an image.
@@ -163,7 +168,7 @@ def map_words_to_image_colors(
     Returns:
         Dictionary mapping words to hex color strings
     """
-    colors = extract_colors_from_image(image_path, num_colors, method)
+    colors = extract_colors_from_image(image_path, num_colors, method, rng=rng)
     
     word_colors = {}
     if frequency_based:
@@ -174,8 +179,13 @@ def map_words_to_image_colors(
     else:
         # Random assignment
         import random
-        for word in words:
-            word_colors[word] = random.choice(colors)
+        if rng is not None:
+            rng_indices = rng.choice(len(colors), size=len(words), replace=True)
+            for word, idx in zip(words, rng_indices):
+                word_colors[word] = colors[int(idx)]
+        else:
+            for word in words:
+                word_colors[word] = random.choice(colors)
     
     return word_colors
 

@@ -1,5 +1,5 @@
 import numpy as np
-from random import randint
+import random
 from PIL import Image, ImageDraw
 import os
 import shutil
@@ -42,7 +42,7 @@ class IntegralImage:
         INCREASE (int): Step size increment for spiral strategies
         DEFAULT_STEP (int): Default step size for movement in placement strategies
     """
-    def __init__(self, height, width, tracing=False, mask=None):
+    def __init__(self, height, width, tracing=False, mask=None, rng: random.Random | None = None):
         """
         Initialize an IntegralImage instance.
         
@@ -59,6 +59,7 @@ class IntegralImage:
         self.DEFAULT_STEP = 2
         
         self.tracing = tracing
+        self._random = rng or random
         self.trace_margin = 200
         self.half_trace_margin = self.trace_margin / 2
         self.structure_created = False
@@ -137,9 +138,14 @@ class IntegralImage:
         logger.debug(f"Found {len(free_locations)} free locations, using strategy '{place_strategy}'")
         method_to_call = getattr(self, place_strategy, None)
         if method_to_call is None:
-            logger.error(f"Strategy '{place_strategy}' is not implemented")
-            raise ValueError(f"Strategy '{place_strategy}' is not implemented.")
-        result = method_to_call(free_locations_set, width_x, height_y, size_x, size_y)
+            from .placement import get_placement_strategy
+            custom_strategy = get_placement_strategy(place_strategy)
+            if custom_strategy is None:
+                logger.error(f"Strategy '{place_strategy}' is not implemented")
+                raise ValueError(f"Strategy '{place_strategy}' is not implemented.")
+            result = custom_strategy(self, free_locations_set, width_x, height_y, size_x, size_y)
+        else:
+            result = method_to_call(free_locations_set, width_x, height_y, size_x, size_y)
         if result:
             logger.debug(f"Position found using strategy '{place_strategy}': {result}")
         else:
@@ -253,7 +259,7 @@ class IntegralImage:
         """
         # Convert to tuple for random selection (set doesn't support indexing)
         locations_tuple = tuple(free_locations)
-        return locations_tuple[randint(0, len(locations_tuple) - 1)]
+        return locations_tuple[self._random.randint(0, len(locations_tuple) - 1)]
 
     def rectangular_code(self, free_locations, width_x, height_y, size_x, size_y, reverse=False):
         """
@@ -543,6 +549,80 @@ class IntegralImage:
 
         self.save_trace_img()
         return None
+
+    def grid(self, free_locations, width_x, height_y, size_x, size_y):
+        """
+        Grid placement strategy - choose the closest available point to the center.
+        """
+        if not free_locations:
+            return None
+
+        best = min(
+            free_locations,
+            key=lambda pos: (abs(pos[0] - width_x) + abs(pos[1] - height_y), abs(pos[0] - width_x), abs(pos[1] - height_y)),
+        )
+        self.draw_trace_point(best[0], best[1])
+        self.save_trace_img()
+        return best
+
+    def force_directed(self, free_locations, width_x, height_y, size_x, size_y):
+        """
+        Force-directed placement strategy - sample among closest candidates.
+        """
+        if not free_locations:
+            return None
+
+        # Prefer positions near the center; sample to avoid deterministic layouts.
+        candidates = sorted(
+            free_locations,
+            key=lambda pos: (pos[0] - width_x) ** 2 + (pos[1] - height_y) ** 2,
+        )[:200]
+        if not candidates:
+            return None
+
+        chosen = self._random.choice(candidates)
+        self.draw_trace_point(chosen[0], chosen[1])
+        self.save_trace_img()
+        return chosen
+
+    def circular(self, free_locations, width_x, height_y, size_x, size_y):
+        """
+        Circular spiral placement strategy centered at the canvas midpoint.
+        """
+        if not free_locations:
+            return None
+
+        max_radius = int(max(self.width, self.height))
+        step = max(1, self.DEFAULT_STEP)
+        for radius in range(0, max_radius, step):
+            steps = max(8, int(2 * math.pi * max(radius, 1) / step))
+            for n in range(steps):
+                angle = (2 * math.pi * n) / steps
+                x = int(width_x + radius * math.cos(angle))
+                y = int(height_y + radius * math.sin(angle))
+                self.draw_trace_point(x, y)
+                if (x, y) in free_locations:
+                    self.save_trace_img()
+                    return x, y
+
+        self.save_trace_img()
+        return None
+
+    def hierarchical(self, free_locations, width_x, height_y, size_x, size_y):
+        """
+        Hierarchical placement strategy - prioritize positions near the center.
+        """
+        if not free_locations:
+            return None
+
+        ranked = sorted(
+            free_locations,
+            key=lambda pos: (pos[0] - width_x) ** 2 + (pos[1] - height_y) ** 2,
+        )
+        chosen = ranked[0]
+        self.draw_trace_point(chosen[0], chosen[1])
+        self.save_trace_img()
+        return chosen
 
     pytag = lambda self, free_locations, width_x, height_y, size_x, size_y: self.pytag_code(free_locations, width_x, height_y, size_x, size_y, is_reverse=False)
     """Forward PyTagCloud spiral placement strategy.

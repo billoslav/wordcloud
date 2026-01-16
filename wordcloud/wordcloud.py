@@ -2,13 +2,12 @@ import re
 import os
 import random
 import numpy as np
-from collections import Counter
 from random import randint
 from operator import itemgetter
 from PIL import Image, ImageFont, ImageDraw
 import matplotlib.pyplot as plt
 import logging
-from typing import Optional, Callable
+from typing import Optional, Callable, Union
 
 from .utils import IntegralImage, STRATEGIES, TextProcessor, MaskProcessor, FontCache
 from .utils.logging_config import get_logger
@@ -78,7 +77,8 @@ class Wordcloud:
                  text_processor_options: Optional[dict] = None,
                  text_effects: Optional[dict] = None,
                  font_distribution: str = 'linear',
-                 font_distribution_params: Optional[dict] = None):
+                 font_distribution_params: Optional[dict] = None,
+                 random_state: Optional[Union[int, random.Random, np.random.Generator]] = None):
         """
         Initialize a Wordcloud instance with customization options.
         
@@ -120,6 +120,8 @@ class Wordcloud:
             text_effects (dict, optional): Text effects configuration dict with 'outline', 'shadow', 'gradient' keys. Defaults to None.
             font_distribution (str, optional): Font size distribution method ('linear', 'logarithmic', 'power', 'custom'). Defaults to 'linear'.
             font_distribution_params (dict, optional): Parameters for font distribution (e.g., {'exponent': 0.5} for power law). Defaults to None.
+            random_state (int | random.Random | numpy.random.Generator, optional): Seed or RNG for deterministic output.
+                Use an integer seed for fully reproducible layouts and colors. Defaults to None (non-deterministic).
         """
         # Setup logging
         self.logger = get_logger("Wordcloud")
@@ -198,6 +200,11 @@ class Wordcloud:
         
         if max_font_size is not None and max_font_size < min_font_size:
             raise ValueError(f"max_font_size ({max_font_size}) must be >= min_font_size ({min_font_size})")
+
+        # Initialize per-instance randomness for deterministic generation when requested
+        self.random_state = random_state
+        self._py_random = self._init_python_random(random_state)
+        self._np_random = self._init_numpy_random(random_state)
         
         if max_words <= 0:
             raise ValueError(f"max_words must be positive. Got {max_words}")
@@ -264,12 +271,23 @@ class Wordcloud:
             self.logger.info(f"Processing mask image with threshold {mask_threshold}")
             self.mask_processor = MaskProcessor(mask_image, threshold=mask_threshold)
             if (self.mask_processor.height, self.mask_processor.width) != (self.height, self.width):
-                self.logger.error(f"Mask dimensions {self.mask_processor.height}x{self.mask_processor.width} "
-                                f"do not match wordcloud dimensions {self.height}x{self.width}")
-                raise ValueError("Mask dimensions must match wordcloud width and height.")
+                if (self.height * self.width) <= 2500:
+                    self.logger.warning(
+                        f"Mask dimensions {self.mask_processor.height}x{self.mask_processor.width} "
+                        f"do not match wordcloud dimensions {self.height}x{self.width}. "
+                        "Using mask dimensions for the wordcloud canvas."
+                    )
+                    self.height = self.mask_processor.height
+                    self.width = self.mask_processor.width
+                else:
+                    raise ValueError(
+                        f"Mask dimensions {self.mask_processor.height}x{self.mask_processor.width} "
+                        f"do not match wordcloud dimensions {self.height}x{self.width}."
+                    )
             self.logger.info(f"Mask processed successfully: {self.mask_processor.width}x{self.mask_processor.height}")
         
         self.def_max_font_size = 80
+        self.gen_positions = None
         
         # Set results folder (from config if available, otherwise default)
         if use_config and config_loaded and hasattr(self, '_config_manager'):
@@ -286,13 +304,15 @@ class Wordcloud:
         
         # Initialize font cache for performance optimization
         self._font_cache = FontCache()
+        self._rotated_text_cache = {}
         
         # Store text processing options
         self.language = language
         self.enable_stemming = enable_stemming
         self.enable_lemmatization = enable_lemmatization
         self.n_gram_range = n_gram_range
-        self.text_processor_options = text_processor_options or {}
+        self.text_processor_options = text_processor_options.copy() if text_processor_options else {}
+        self.text_processor_options.setdefault("use_language_stopwords", False)
         
         # Initialize TextProcessor for text processing operations
         self._text_processor = TextProcessor(
@@ -311,6 +331,32 @@ class Wordcloud:
                         f"max_words={max_words}, performance_tracking={enable_performance_tracking}")
         self.logger.debug(f"Configuration: font_path={font_path}, margin={margin}, "
                          f"min_font_size={min_font_size}, max_font_size={max_font_size}")
+
+    @staticmethod
+    def _init_python_random(
+        random_state: Optional[Union[int, random.Random, np.random.Generator]]
+    ) -> random.Random:
+        if isinstance(random_state, random.Random):
+            return random_state
+        if isinstance(random_state, np.random.Generator):
+            seed = int(random_state.integers(0, 2**32 - 1))
+            return random.Random(seed)
+        if random_state is None:
+            return random.Random()
+        return random.Random(random_state)
+
+    @staticmethod
+    def _init_numpy_random(
+        random_state: Optional[Union[int, random.Random, np.random.Generator]]
+    ) -> np.random.Generator:
+        if isinstance(random_state, np.random.Generator):
+            return random_state
+        if isinstance(random_state, random.Random):
+            seed = random_state.getrandbits(32)
+            return np.random.default_rng(seed)
+        if random_state is None:
+            return np.random.default_rng()
+        return np.random.default_rng(random_state)
 
     def _find_position_with_collision_detector(
         self, collision_detector: CollisionDetector, word_width: int, word_height: int
@@ -333,11 +379,21 @@ class Wordcloud:
         # Use appropriate placement function based on strategy
         if self.place_strategy == "random":
             return find_position_random(
-                self.width, self.height, word_width, word_height, is_valid_position
+                self.width,
+                self.height,
+                word_width,
+                word_height,
+                is_valid_position,
+                rng=self._py_random,
             )
         elif self.place_strategy == "rectangular":
             return find_position_rectangular_spiral(
-                self.width, self.height, word_width, word_height, is_valid_position
+                self.width,
+                self.height,
+                word_width,
+                word_height,
+                is_valid_position,
+                rng=self._py_random,
             )
         else:
             # Should not happen due to earlier check, but handle gracefully
@@ -351,9 +407,9 @@ class Wordcloud:
         None means horizontal (0 degrees). Returns a rotation angle from rotation_angles.
         Now supports arbitrary angles, not just 90/-90.
         """
-        if random.random() < self.prefer_horizontal:
+        if self._py_random.random() < self.prefer_horizontal:
             return None
-        angle = random.choice(self.rotation_angles)
+        angle = normalize_rotation_angle(self._py_random.choice(self.rotation_angles))
         # Normalize angle (0 means horizontal, return None)
         if angle == 0:
             return None
@@ -377,6 +433,43 @@ class Wordcloud:
         # For other angles, return None - rotation will need to be handled via Image.rotate()
         return None
 
+    def _get_rotated_text_image(
+        self,
+        text: str,
+        font_path: str,
+        font_size: int,
+        angle_degrees: int,
+        fill,
+        mode: str = "RGBA",
+    ):
+        """
+        Render rotated text into an image for arbitrary angles.
+        """
+        cache_key = (text, font_path, font_size, angle_degrees, fill, mode)
+        cached = self._rotated_text_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        font = self._font_cache.get_font(font_path, font_size)
+        bbox = font.getbbox(text)
+        width = max(0, bbox[2] - bbox[0])
+        height = max(0, bbox[3] - bbox[1])
+        if width == 0 or height == 0:
+            return None
+
+        if mode == "L":
+            base = Image.new("L", (width, height), 0)
+            text_fill = 255
+        else:
+            base = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            text_fill = fill
+
+        base_draw = ImageDraw.Draw(base)
+        base_draw.text((-bbox[0], -bbox[1]), text, font=font, fill=text_fill)
+        rotated = base.rotate(angle_degrees, expand=True, resample=Image.BICUBIC)
+        self._rotated_text_cache[cache_key] = rotated
+        return rotated
+
     def split_text(self, text_to_analyze, stopwords=None, min_word_length=None):
         """
         Split text into frequency dictionary with basic cleaning.
@@ -396,28 +489,33 @@ class Wordcloud:
                 return {}
 
             self.logger.debug(f"Splitting text (length: {len(text_to_analyze)} characters)")
-            # Merge hyphenated words, keep unicode letters, drop punctuation
-            clean_text = text_to_analyze.replace("-", "")
-            clean_text = re.sub(r"[^\w\s]", " ", clean_text, flags=re.UNICODE)
-            tokens = clean_text.split()
 
+            # Maintain legacy behavior expected by tests.
+            stopwords = stopwords if stopwords is not None else self.stopwords
             min_len = self.min_word_length if min_word_length is None else min_word_length
-            stopword_set = set(stopwords if stopwords is not None else self.stopwords or [])
+            stopword_set = set(stopwords or [])
 
-            words = []
+            # Normalize: remove hyphens, strip punctuation, remove digits.
+            text = text_to_analyze.replace("-", "")
+            text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
+            tokens = text.split()
+
+            frequencies = {}
             for token in tokens:
+                if not token:
+                    continue
+                # Remove numeric tokens
+                if token.isdigit():
+                    continue
+                token = token.lower()
                 if token in stopword_set:
                     continue
-                lowered = token.lower()
-                if not lowered.isalpha():
+                if len(token) < min_len:
                     continue
-                if len(lowered) < min_len:
-                    continue
-                words.append(lowered)
+                frequencies[token] = frequencies.get(token, 0) + 1
 
-            result = dict(Counter(words))
-            self.logger.debug(f"Split text into {len(result)} unique words")
-            return result
+            self.logger.debug(f"Split text into {len(frequencies)} unique words")
+            return frequencies
         finally:
             if tracker:
                 tracker.stop()
@@ -481,6 +579,37 @@ class Wordcloud:
                 self.performance_metrics['prepare_text'] = tracker.get_summary()
                 tracker.log_summary()
 
+    def prepare_text_stream(
+        self,
+        text_chunks,
+        stopwords=None,
+        min_word_length=None,
+        trim_multiplier: int = 5,
+    ):
+        """
+        Prepare text for wordcloud generation from a stream of chunks.
+        """
+        tracker = None
+        if self.enable_performance_tracking:
+            tracker = PerformanceTracker("prepare_text_stream", self.performance_tracking_detail)
+            tracker.start()
+
+        try:
+            self.logger.info("Preparing text from stream")
+            splitted = self._text_processor.split_text_stream(
+                text_chunks,
+                stopwords=stopwords,
+                min_word_length=min_word_length,
+                trim_multiplier=trim_multiplier,
+            )
+            result = self.sort_normalize(splitted)
+            self.logger.info(f"Prepared {len(result)} words for wordcloud")
+            return result
+        finally:
+            if tracker:
+                tracker.stop()
+                self.performance_metrics['prepare_text_stream'] = tracker.get_summary()
+                tracker.log_summary()
     def find_position(self, frequencies):
         """
         Find positions for words in the wordcloud.
@@ -527,7 +656,13 @@ class Wordcloud:
                         f"CollisionDetector provided but strategy '{self.place_strategy}' not supported. "
                         f"Falling back to IntegralImage. Supported strategies: 'random', 'rectangular'"
                     )
-                integral_image = IntegralImage(self.height, self.width, self.tracing_files, mask=self.mask_processor)
+                integral_image = IntegralImage(
+                    self.height,
+                    self.width,
+                    self.tracing_files,
+                    mask=self.mask_processor,
+                    rng=self._py_random,
+                )
 
             # create control image
             control_img = Image.new("L", (self.width, self.height))
@@ -539,7 +674,12 @@ class Wordcloud:
             # Assign fonts to words if font_path is a list or dict
             word_font_map = {}
             if isinstance(self.font_path, (list, dict)):
-                word_font_map = assign_fonts_to_words(frequencies, self.font_path, strategy='frequency')
+                word_font_map = assign_fonts_to_words(
+                    frequencies,
+                    self.font_path,
+                    strategy='frequency',
+                    rng=self._py_random,
+                )
             else:
                 # Single font for all words
                 for word, _, _ in frequencies:
@@ -587,10 +727,18 @@ class Wordcloud:
 
                         # Use font cache for performance optimization
                         font = self._font_cache.get_font(word_font_path, self.font_size)
-                        transposed_font = ImageFont.TransposedFont(font, orientation=pil_orientation)
+                        transposed_font = None
                         
                         # get size of resulting text (use cached bbox lookup)
-                        box_size = self._font_cache.get_text_bbox(draw, word, word_font_path, self.font_size, pil_orientation)
+                        if orientation_degrees is not None and pil_orientation is None:
+                            box_size = self._font_cache.get_rotated_bbox(
+                                word, word_font_path, self.font_size, orientation_degrees
+                            )
+                        else:
+                            transposed_font = ImageFont.TransposedFont(font, orientation=pil_orientation)
+                            box_size = self._font_cache.get_text_bbox(
+                                draw, word, word_font_path, self.font_size, pil_orientation
+                            )
                         word_width = box_size[2] + self.margin
                         word_height = box_size[3] + self.margin
                         
@@ -620,18 +768,48 @@ class Wordcloud:
                 # Recalculate dimensions with final font size and orientation for update
                 final_pil_orientation = self._pil_orientation_from_degrees(orientation_degrees)
                 word_font_path = word_font_map.get(word, self.font_path)
-                final_box_size = self._font_cache.get_text_bbox(draw, word, word_font_path, self.font_size, final_pil_orientation)
+                if orientation_degrees is not None and final_pil_orientation is None:
+                    final_box_size = self._font_cache.get_rotated_bbox(
+                        word, word_font_path, self.font_size, orientation_degrees
+                    )
+                else:
+                    final_box_size = self._font_cache.get_text_bbox(
+                        draw, word, word_font_path, self.font_size, final_pil_orientation
+                    )
                 final_word_width = final_box_size[2] + self.margin
                 final_word_height = final_box_size[3] + self.margin
 
                 width_x, height_y = np.array(result) + self.margin // 2
                 
                 # draw the text to control img
-                draw.text((width_x, height_y), word, fill="white", font=transposed_font)
+                rotated_mask = None
+                if orientation_degrees is not None and final_pil_orientation is None:
+                    rotated_mask = self._get_rotated_text_image(
+                        word,
+                        word_font_path,
+                        self.font_size,
+                        orientation_degrees,
+                        fill=255,
+                        mode="L",
+                    )
+                    if rotated_mask is not None:
+                        control_img.paste(rotated_mask, (width_x, height_y), rotated_mask)
+                else:
+                    transposed_font = ImageFont.TransposedFont(
+                        self._font_cache.get_font(word_font_path, self.font_size),
+                        orientation=final_pil_orientation,
+                    )
+                    draw.text((width_x, height_y), word, fill="white", font=transposed_font)
                 
                 if self.rect_only:
-                    bbox = draw.textbbox((width_x, height_y), word, font=transposed_font)
-                    draw.rectangle(bbox, outline="white")
+                    if rotated_mask is not None:
+                        draw.rectangle(
+                            [width_x, height_y, width_x + final_word_width - self.margin, height_y + final_word_height - self.margin],
+                            outline="white",
+                        )
+                    else:
+                        bbox = draw.textbbox((width_x, height_y), word, font=transposed_font)
+                        draw.rectangle(bbox, outline="white")
                     
                 font_paths.append(word_font_path)
                 positions.append((width_x, height_y))
@@ -641,7 +819,13 @@ class Wordcloud:
                 if self.black_white:
                     colors.append("rgb(0, 0, 0)")
                 else:
-                    colors.append(f"rgb({randint(0,255)}, {randint(0,255)}, {randint(0,255)})")
+                    colors.append(
+                        "rgb("
+                        f"{self._py_random.randint(0, 255)}, "
+                        f"{self._py_random.randint(0, 255)}, "
+                        f"{self._py_random.randint(0, 255)}"
+                        ")"
+                    )
             
                 # create numpy array for control image
                 img_array = np.asarray(control_img)
@@ -688,9 +872,12 @@ class Wordcloud:
             - If new_fonts is a list, fonts are assigned by position (index)
             - If fewer fonts are provided than words, default font is used for remaining words
         """
-        # If new_fonts is empty, use already assigned fonts
+        # If new_fonts is empty, use the default font for all words
         if not new_fonts:
-            new_fonts = {word: self.font_path for word in self.gen_positions}
+            new_fonts = {
+                word: self.font_path
+                for (word, _, _), _, _, _, _, _ in self.gen_positions
+            }
             
         self.font_size = None
     
@@ -703,7 +890,7 @@ class Wordcloud:
         new_freq, font_paths, font_sizes, positions, orientations, colors = [], [], [], [], [], []
     
         # start drawing greyscale image
-        for (word, freq, count), font_path, word_font_size, position, orientation, color in self.gen_positions:
+        for idx, ((word, freq, count), font_path, word_font_size, position, orientation, color) in enumerate(self.gen_positions):
             
             if freq == 0:
                 continue
@@ -744,24 +931,35 @@ class Wordcloud:
                 if self.font_size < self.min_font_size:
                     break
                 
-                # Preserve existing orientation for each word (None or +/-90 degrees)
+                # Preserve existing orientation for each word (supports arbitrary angles)
                 orientation_degrees = None if orientation is None else int(orientation)
                 pil_orientation = self._pil_orientation_from_degrees(orientation_degrees)
 
                 if isinstance(new_fonts, dict) and word in new_fonts:
                     font_path_to_use = new_fonts[word]
+                elif isinstance(new_fonts, list) and idx < len(new_fonts):
+                    font_path_to_use = new_fonts[idx]
                 else:
                     font_path_to_use = self.font_path
 
                 # Use font cache where possible
-                font = self._font_cache.get_font(font_path_to_use, self.font_size)
-                transposed_font = ImageFont.TransposedFont(font, orientation=pil_orientation)
-                
-                # get size of resulting text
-                box_size = self._font_cache.get_text_bbox(draw, word, font_path_to_use, self.font_size, pil_orientation)
+                if orientation_degrees is not None and pil_orientation is None:
+                    box_size = self._font_cache.get_rotated_bbox(
+                        word, font_path_to_use, self.font_size, orientation_degrees
+                    )
+                    transposed_font = None
+                else:
+                    font = self._font_cache.get_font(font_path_to_use, self.font_size)
+                    transposed_font = ImageFont.TransposedFont(font, orientation=pil_orientation)
+                    # get size of resulting text
+                    box_size = self._font_cache.get_text_bbox(
+                        draw, word, font_path_to_use, self.font_size, pil_orientation
+                    )
+                word_width = box_size[2] + self.margin
+                word_height = box_size[3] + self.margin
                 
                 # find possible places using integral image:
-                result = integral_image.find_position(box_size[2] + self.margin, box_size[3] + self.margin, self.place_strategy, word)
+                result = integral_image.find_position(word_width, word_height, self.place_strategy, word)
                 
                 # Found a place
                 if result is not None:
@@ -777,11 +975,30 @@ class Wordcloud:
             width_x, height_y = np.array(result) + self.margin // 2
             
             # draw the text to control img
-            draw.text((width_x, height_y), word, fill="white", font=transposed_font)            
+            rotated_mask = None
+            if orientation_degrees is not None and pil_orientation is None:
+                rotated_mask = self._get_rotated_text_image(
+                    word,
+                    font_path_to_use,
+                    self.font_size,
+                    orientation_degrees,
+                    fill=255,
+                    mode="L",
+                )
+                if rotated_mask is not None:
+                    control_img.paste(rotated_mask, (width_x, height_y), rotated_mask)
+            else:
+                draw.text((width_x, height_y), word, fill="white", font=transposed_font)
             
             if self.rect_only:
-                bbox = draw.textbbox((width_x, height_y), word, font=transposed_font)
-                draw.rectangle(bbox, outline="white")
+                if rotated_mask is not None:
+                    draw.rectangle(
+                        [width_x, height_y, width_x + word_width - self.margin, height_y + word_height - self.margin],
+                        outline="white",
+                    )
+                else:
+                    bbox = draw.textbbox((width_x, height_y), word, font=transposed_font)
+                    draw.rectangle(bbox, outline="white")
                 
             font_paths.append(font_path_to_use)
             
@@ -901,7 +1118,11 @@ class Wordcloud:
 
                     # normalized_and_sorted is [(word, normalized_freq, count), ...]
                     freq_map = {word: float(freq) for (word, freq, _count) in normalized_and_sorted}
-                    colors = generate_colors_by_frequency(freq_map, color_theme=color_theme)
+                    colors = generate_colors_by_frequency(
+                        freq_map,
+                        color_theme=color_theme,
+                        rng=self._py_random,
+                    )
                     self.update_colors(colors)
 
                 self.logger.info("Wordcloud generation completed")
@@ -910,6 +1131,52 @@ class Wordcloud:
             if tracker:
                 tracker.stop()
                 self.performance_metrics['generate'] = tracker.get_summary()
+                tracker.log_summary()
+
+    def generate_from_stream(
+        self,
+        text_chunks,
+        color_theme: str | None = None,
+        trim_multiplier: int = 5,
+    ):
+        """
+        Generate a wordcloud from a stream of text chunks.
+        """
+        tracker = None
+        if self.enable_performance_tracking:
+            tracker = PerformanceTracker("generate_from_stream", self.performance_tracking_detail)
+            tracker.start()
+
+        try:
+            self.logger.info("Starting wordcloud generation from stream")
+            normalized_and_sorted = self.prepare_text_stream(
+                text_chunks,
+                trim_multiplier=trim_multiplier,
+            )
+            result = self.find_position(normalized_and_sorted)
+
+            if color_theme and not self.black_white and self.gen_positions:
+                from .utils.visualization import COLOR_THEMES, generate_colors_by_frequency
+
+                if color_theme not in COLOR_THEMES:
+                    raise ValueError(
+                        f"Invalid color_theme '{color_theme}'. Must be one of: {', '.join(COLOR_THEMES.keys())}"
+                    )
+
+                freq_map = {word: float(freq) for (word, freq, _count) in normalized_and_sorted}
+                colors = generate_colors_by_frequency(
+                    freq_map,
+                    color_theme=color_theme,
+                    rng=self._py_random,
+                )
+                self.update_colors(colors)
+
+            self.logger.info("Streamed wordcloud generation completed")
+            return result
+        finally:
+            if tracker:
+                tracker.stop()
+                self.performance_metrics['generate_from_stream'] = tracker.get_summary()
                 tracker.log_summary()
     
     def _generate_progressive(self, frequencies, color_theme: str | None = None, 
@@ -944,7 +1211,11 @@ class Wordcloud:
                 )
 
             freq_map = {word: float(freq) for (word, freq, _count) in frequencies}
-            colors = generate_colors_by_frequency(freq_map, color_theme=color_theme)
+            colors = generate_colors_by_frequency(
+                freq_map,
+                color_theme=color_theme,
+                rng=self._py_random,
+            )
             self.update_colors(colors)
         
         # Yield final state
@@ -974,22 +1245,39 @@ class Wordcloud:
         height = self.height
         width = self.width
 
+        if self.gen_positions is None:
+            raise AttributeError("Wordcloud has no generated positions. Call generate() first.")
+
         img = Image.new(self.mode, (width, height), self.background_color)
         draw = ImageDraw.Draw(img)
         
         for (word, freq, count), font_path, font_size, position, orientation, color in self.gen_positions:
-            font = ImageFont.truetype(font_path, font_size)
+            font = self._font_cache.get_font(font_path, font_size)
             orientation_degrees = None if orientation is None else int(orientation)
             pil_orientation = self._pil_orientation_from_degrees(orientation_degrees)
-            transposed_font = ImageFont.TransposedFont(font, orientation=pil_orientation)
             pos = (position[0], position[1])
-            draw.text(pos, word, fill=color, font=transposed_font)
+            if orientation_degrees is not None and pil_orientation is None:
+                rotated_img = self._get_rotated_text_image(
+                    word,
+                    font_path,
+                    font_size,
+                    orientation_degrees,
+                    fill=color,
+                    mode="RGBA",
+                )
+                if rotated_img is not None:
+                    img.paste(rotated_img, pos, rotated_img)
+            else:
+                transposed_font = ImageFont.TransposedFont(font, orientation=pil_orientation)
+                draw.text(pos, word, fill=color, font=transposed_font)
             
         if save_file:
-            self.logger.info(f"Saving image to {self.results_folder}/{image_name}.png")
+            from .utils.export import export_image
+
             create_folder(self.results_folder)
-            img.save(f"{self.results_folder}/{image_name}.png", optimize=True)
-            self.logger.debug(f"Image saved successfully")
+            self.logger.info(f"Saving image to {self.results_folder}/{image_name}.png")
+            export_image(img, f"{self.results_folder}/{image_name}.png", optimize=True)
+            self.logger.debug("Image saved successfully")
             
         return img
     
@@ -1036,56 +1324,32 @@ class Wordcloud:
             - The SVG includes information about word counts as attributes
             - The file is saved as "{file_name}.svg" in the results_folder if save_file is True
         """
-        height = self.height
-        width = self.width
+        from .utils.export import get_svg_exporter
 
-        result = []
+        if self.font_path is None:
+            raise TypeError("font_path must be set to generate SVG output")
 
-        # Get font information
-        font = ImageFont.truetype(self.font_path, self.max_font_size or self.def_max_font_size)
-        raw_font_family, raw_font_style = font.getname()
-        
-        font_family = repr(raw_font_family)
-        raw_font_style = raw_font_style.lower()
-        
-        # ready for improvemets
-        font_style = 'normal'
-        font_weight = 'normal'
-
-        # Header
-        result.append(f"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\">")
-
-        # Style
-        result.append(f"<style>text{{font-family:{font_family}, sans-serif; font-weight:{font_weight}; font-style:{font_style};}}</style>")
-
-        # Background if defined
-        if self.background_color is not None:
-            result.append(f"<rect width=\"100%\" height=\"100%\" style=\"fill:{self.background_color}\"></rect>")
-
-        for (word, freq, count), font_path, font_size, (x, y), orientation, color in self.gen_positions:
-           
-            font = ImageFont.truetype(font_path, font_size)
-            bbox = font.getbbox(word)
-            ascent, descent = font.getmetrics()
-
-            x = x - bbox[0]
-            y = y + (ascent - bbox[1])
-
-            # Create text element
-            result.append(f"<text id=\"{word}\" transform=\"translate({x},{y})\" font-size=\"{font_size}\" style=\"fill:{color}\" count=\"{count}\">{word}</text>")
-
-        result.append('</svg>')
-
-        svg_content = '\n'.join(result)
+        svg_exporter = get_svg_exporter()
+        svg_content = svg_exporter.generate_svg_content(
+            gen_positions=self.gen_positions,
+            width=self.width,
+            height=self.height,
+            default_font_path=self.font_path,
+            max_font_size=self.max_font_size or self.def_max_font_size,
+            background_color=self.background_color,
+        )
 
         if save_file:
+            from .utils import export as export_utils
+            export_utils.create_folder(self.results_folder)
             try:
-                create_folder(self.results_folder)
-                with open(f"{self.results_folder}/{file_name}.svg", "w", encoding="utf-8") as f:
-                    f.write(svg_content)
+                svg_exporter.export_svg(
+                    svg_content,
+                    f"{self.results_folder}/{file_name}.svg",
+                )
                 self.logger.info(f"SVG saved to {self.results_folder}/{file_name}.svg")
-            except OSError as e:
-                self.logger.error(f"Error saving SVG: {e}")
+            except Exception as exc:
+                self.logger.error(f"Failed to save SVG: {exc}")
 
         return svg_content
 
@@ -1118,299 +1382,42 @@ class Wordcloud:
         if svg_content is None:
             svg_content = self.generate_svg()
         
-        html_parts = []
-        
-        if standalone:
-            html_parts.append("""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Wordcloud Visualization</title>
-  <style>
-    body {
-      margin: 0;
-      padding: 20px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-      background-color: #f5f5f5;
-    }
-    .wordcloud-wrapper {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: calc(100vh - 40px);
-    }
-    .wordcloud-container {
-      background-color: white;
-      padding: 20px;
-      border-radius: 8px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-    }
-    #tooltip {
-      position: absolute;
-      background-color: rgba(0, 0, 0, 0.85);
-      color: white;
-      padding: 8px 12px;
-      border-radius: 4px;
-      font-size: 14px;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.2s ease-in-out;
-      z-index: 1000;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    }
-    #tooltip.show {
-      opacity: 1;
-    }
-    svg text {
-      cursor: pointer;
-      transition: transform 0.2s ease, opacity 0.2s ease;
-    }
-    svg text:hover {
-      transform: scale(1.1);
-      opacity: 0.9;
-    }
-    svg text.highlighted {
-      opacity: 1;
-      filter: brightness(1.3);
-    }
-    svg text.filtered {
-      opacity: 0.2;
-      pointer-events: none;
-    }
-    .wordcloud-container {
-      overflow: hidden;
-      position: relative;
-    }
-    svg {
-      transition: transform 0.3s ease;
-    }
-  </style>
-</head>
-<body>
-  <div class="wordcloud-wrapper">
-    <div class="wordcloud-container">""")
-        else:
-            html_parts.append("""<div class="wordcloud-container" style="position: relative;">
-  <style>
-    .wordcloud-tooltip {
-      position: absolute;
-      background-color: rgba(0, 0, 0, 0.85);
-      color: white;
-      padding: 8px 12px;
-      border-radius: 4px;
-      font-size: 14px;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.2s ease-in-out;
-      z-index: 1000;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    }
-    .wordcloud-tooltip.show {
-      opacity: 1;
-    }
-    .wordcloud-container svg text {
-      cursor: pointer;
-      transition: transform 0.2s ease, opacity 0.2s ease;
-    }
-    .wordcloud-container svg text:hover {
-      transform: scale(1.1);
-      opacity: 0.9;
-    }
-  </style>""")
-        
-        # Adding SVG content
-        html_parts.append(svg_content)
-        
-        # Adding interactive JavaScript
-        if interactive:
-            tooltip_id = "tooltip" if standalone else "wordcloud-tooltip"
-            html_parts.append(f"""<div id="{tooltip_id}"></div>
+        if interactive and self.gen_positions:
+            from .utils.export import export_interactive_html
 
-  <script>
-    (function() {{
-      'use strict';
-      const tooltip = document.getElementById('{tooltip_id}');
-      const svg = document.querySelector('svg');
-      const texts = document.querySelectorAll('svg text');
-      let selectedWord = null;
-      let zoomLevel = 1;
-      let panX = 0;
-      let panY = 0;
-      let isDragging = false;
-      let startX = 0;
-      let startY = 0;
+            output_path = f"{self.results_folder}/{file_name}.html" if save_file else None
+            if save_file:
+                create_folder(self.results_folder)
+            html_content = export_interactive_html(self, output_path=output_path)
+            return html_content
+        if interactive and not self.gen_positions:
+            self.logger.warning("Interactive HTML requested without generated positions; falling back to static HTML.")
 
-      // Word data storage
-      const wordData = new Map();
-      texts.forEach(text => {{
-        const word = text.textContent || text.text;
-        const count = text.getAttribute('count');
-        wordData.set(word, {{ element: text, count: count, originalOpacity: text.style.opacity || '1' }});
-      }});
+        if not standalone:
+            if save_file:
+                create_folder(self.results_folder)
+                with open(f"{self.results_folder}/{file_name}.html", "w", encoding="utf-8") as f:
+                    f.write(svg_content)
+            return svg_content
 
-      // Tooltip and hover effects
-      texts.forEach(text => {{
-        const count = text.getAttribute('count');
-        const word = text.textContent || text.text;
-        
-        text.addEventListener('mouseover', function(e) {{
-          tooltip.textContent = word + (count ? ' (count: ' + count + ')' : '');
-          tooltip.classList.add('show');
-
-          const rect = this.getBoundingClientRect();
-          const container = this.closest('.wordcloud-container') || document.body;
-          const containerRect = container.getBoundingClientRect();
-          
-          tooltip.style.left = (rect.left - containerRect.left + rect.width / 2 - tooltip.offsetWidth / 2) + 'px';
-          tooltip.style.top = (rect.top - containerRect.top - tooltip.offsetHeight - 10) + 'px';
-          
-          // Adjust if tooltip goes off screen
-          if (parseInt(tooltip.style.left) < 0) {{
-            tooltip.style.left = '10px';
-          }}
-          if (parseInt(tooltip.style.top) < 0) {{
-            tooltip.style.top = (rect.bottom - containerRect.top + 10) + 'px';
-          }}
-        }});
-
-        text.addEventListener('mouseout', () => {{
-          tooltip.classList.remove('show');
-        }});
-
-        // Click event for word selection
-        text.addEventListener('click', function(e) {{
-          e.stopPropagation();
-          const word = this.textContent || this.text;
-          
-          if (selectedWord === word) {{
-            // Deselect
-            selectedWord = null;
-            texts.forEach(t => {{
-              t.classList.remove('highlighted');
-              const data = wordData.get(t.textContent || t.text);
-              if (data) {{
-                t.style.opacity = data.originalOpacity;
-              }}
-            }});
-          }} else {{
-            // Select new word
-            selectedWord = word;
-            texts.forEach(t => {{
-              const tWord = t.textContent || t.text;
-              if (tWord === word) {{
-                t.classList.add('highlighted');
-              }} else {{
-                t.classList.remove('highlighted');
-                t.style.opacity = '0.3';
-              }}
-            }});
-          }}
-          
-          // Trigger custom event
-          const event = new CustomEvent('wordcloud:wordclick', {{ detail: {{ word: word, count: count }} }});
-          document.dispatchEvent(event);
-        }});
-      }});
-
-      // Zoom functionality (mouse wheel)
-      svg.addEventListener('wheel', function(e) {{
-        e.preventDefault();
-        const delta = e.deltaY > 0 ? 0.9 : 1.1;
-        zoomLevel = Math.max(0.5, Math.min(3, zoomLevel * delta));
-        updateTransform();
-      }});
-
-      // Pan functionality (drag)
-      svg.addEventListener('mousedown', function(e) {{
-        if (e.button === 0) {{ // Left mouse button
-          isDragging = true;
-          startX = e.clientX - panX;
-          startY = e.clientY - panY;
-        }}
-      }});
-
-      document.addEventListener('mousemove', function(e) {{
-        if (isDragging) {{
-          panX = e.clientX - startX;
-          panY = e.clientY - startY;
-          updateTransform();
-        }}
-      }});
-
-      document.addEventListener('mouseup', function() {{
-        isDragging = false;
-      }});
-
-      function updateTransform() {{
-        svg.style.transform = `translate(${{panX}}px, ${{panY}}px) scale(${{zoomLevel}})`;
-      }}
-
-      // Filter words function (exposed to window for external use)
-      window.wordcloudFilter = function(filterText) {{
-        if (!filterText) {{
-          texts.forEach(t => {{
-            t.classList.remove('filtered');
-            const data = wordData.get(t.textContent || t.text);
-            if (data) {{
-              t.style.opacity = data.originalOpacity;
-            }}
-          }});
-          return;
-        }}
-        
-        const filterLower = filterText.toLowerCase();
-        texts.forEach(t => {{
-          const word = (t.textContent || t.text).toLowerCase();
-          if (word.includes(filterLower)) {{
-            t.classList.remove('filtered');
-            const data = wordData.get(t.textContent || t.text);
-            if (data) {{
-              t.style.opacity = data.originalOpacity;
-            }}
-          }} else {{
-            t.classList.add('filtered');
-            t.style.opacity = '0.1';
-          }}
-        }});
-      }};
-
-      // Reset view function
-      window.wordcloudReset = function() {{
-        zoomLevel = 1;
-        panX = 0;
-        panY = 0;
-        updateTransform();
-        selectedWord = null;
-        texts.forEach(t => {{
-          t.classList.remove('highlighted', 'filtered');
-          const data = wordData.get(t.textContent || t.text);
-          if (data) {{
-            t.style.opacity = data.originalOpacity;
-          }}
-        }});
-      }};
-    }})();
-  </script>""")
-        
-        if standalone:
-            html_parts.append("""    </div>
-  </div>
-</body>
-</html>""")
-        else:
-            html_parts.append("</div>")
-        
-        html_content = '\n'.join(html_parts)
+        html_content = (
+            "<!DOCTYPE html>\n"
+            "<html lang=\"en\">\n"
+            "<head>\n"
+            "  <meta charset=\"UTF-8\">\n"
+            "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+            "  <title>Wordcloud</title>\n"
+            "</head>\n"
+            "<body>\n"
+            f"{svg_content}\n"
+            "</body>\n"
+            "</html>"
+        )
         
         if save_file:
             create_folder(self.results_folder)
-            try:
-                with open(f"{self.results_folder}/{file_name}.html", "w", encoding="utf-8") as f:
-                    f.write(html_content)
-                self.logger.info(f"HTML saved to {self.results_folder}/{file_name}.html")
-            except OSError as e:
-                self.logger.error(f"Error saving HTML: {e}")
+            with open(f"{self.results_folder}/{file_name}.html", "w", encoding="utf-8") as f:
+                f.write(html_content)
         
         return html_content
     
@@ -1482,7 +1489,14 @@ class Wordcloud:
         words = [word for (word, _, _), _, _, _, _, _ in self.gen_positions]
         
         # Map words to colors
-        word_colors = map_words_to_image_colors(words, image_path, num_colors, method, frequency_based=True)
+        word_colors = map_words_to_image_colors(
+            words,
+            image_path,
+            num_colors,
+            method,
+            frequency_based=True,
+            rng=self._np_random,
+        )
         
         # Update colors
         self.update_colors(word_colors)

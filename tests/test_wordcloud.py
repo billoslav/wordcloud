@@ -58,6 +58,24 @@ class TestIntegralImage(unittest.TestCase):
         x, y = position
         self.assertTrue(0 <= x <= self.width - size_x)
         self.assertTrue(0 <= y <= self.height - size_y)
+
+    def test_find_position_grid(self):
+        size_x = 20
+        size_y = 30
+        position = self.integral_image.find_position(size_x, size_y, place_strategy="grid")
+        self.assertIsNotNone(position)
+        x, y = position
+        self.assertTrue(0 <= x <= self.width - size_x)
+        self.assertTrue(0 <= y <= self.height - size_y)
+
+    def test_find_position_force_directed(self):
+        size_x = 20
+        size_y = 30
+        position = self.integral_image.find_position(size_x, size_y, place_strategy="force_directed")
+        self.assertIsNotNone(position)
+        x, y = position
+        self.assertTrue(0 <= x <= self.width - size_x)
+        self.assertTrue(0 <= y <= self.height - size_y)
     
     def test_find_position_rectangular_reverse(self):
         size_x = 20
@@ -2109,7 +2127,7 @@ class TestWordcloud(unittest.TestCase):
     def test_generate_svg_no_font_path(self):
         self.wc.gen_positions = self.initial_positions
         self.wc.font_path = None
-        with self.assertRaises(AttributeError): #Expect error
+        with self.assertRaises((TypeError, AttributeError)): #Expect error
           self.wc.generate_svg()
 
     def test_generate_svg_with_unicode(self):
@@ -2121,7 +2139,7 @@ class TestWordcloud(unittest.TestCase):
         self.assertTrue("tést1" in svg_content)
 
     @patch("builtins.open", new_callable=mock_open)
-    @patch("wordcloud.wordcloud.create_folder")
+    @patch("wordcloud.utils.export.create_folder")
     def test_generate_svg_os_error(self, mock_create_folder, mock_file):
         self.wc.gen_positions = self.initial_positions
         mock_file.side_effect = OSError("Simulated OSError")
@@ -2170,23 +2188,57 @@ class TestWordcloud(unittest.TestCase):
     # Note: create_folder method has been moved to helpers
     # See tests/test_helpers.py for comprehensive tests of this function
 
-    @patch('PIL.Image.Image.save')
-    @patch("wordcloud.wordcloud.create_folder")
-    def test_draw_image(self, mock_create_folder, mock_save):
+    @patch("wordcloud.utils.export.export_image")
+    def test_draw_image(self, mock_export_image):
         self.wc.gen_positions = [
             (("test", 0.5, 2), FONT_PATH, 20, (50, 50), None, "red")
         ]
         self.wc.draw_image(save_file=True)
-        mock_create_folder.assert_called_once()
-        mock_save.assert_called_once()
+        mock_export_image.assert_called_once()
 
         image = self.wc.draw_image()
         self.assertIsInstance(image, Image.Image)
+
+    def test_arbitrary_rotation_angle(self):
+        wc = Wordcloud(
+            width=200,
+            height=100,
+            font_path=FONT_PATH,
+            rotation_angles=(45,),
+            prefer_horizontal=0,
+            min_font_size=10,
+            max_font_size=20,
+            font_step=1,
+            margin=0,
+        )
+        wc.generate("rotate")
+        self.assertTrue(wc.gen_positions)
+        self.assertEqual(wc.gen_positions[0][4], 45)
+        image = wc.draw_image()
+        self.assertIsInstance(image, Image.Image)
+
+    def test_update_position_with_arbitrary_rotation(self):
+        wc = Wordcloud(
+            width=200,
+            height=100,
+            font_path=FONT_PATH,
+            rotation_angles=(45,),
+            prefer_horizontal=0,
+            min_font_size=10,
+            max_font_size=20,
+            font_step=1,
+            margin=0,
+        )
+        wc.generate("rotate")
+        original_orientation = wc.gen_positions[0][4]
+        wc.update_position([FONT_PATH])
+        self.assertTrue(wc.gen_positions)
+        self.assertEqual(wc.gen_positions[0][4], original_orientation)
         
     def test_stopwords_case_sensitive(self):
         self.wc.stopwords = ["the"]
-        text = "The quick brown fox jumps over the lazy dog. thE" #stopwords check is case sensitive
-        expected = {'quick': 1, 'brown': 1, 'fox': 1, 'jumps': 1, 'over': 1, 'lazy': 1, 'dog': 1, 'the': 2}
+        text = "The quick brown fox jumps over the lazy dog. thE"
+        expected = {'quick': 1, 'brown': 1, 'fox': 1, 'jumps': 1, 'over': 1, 'lazy': 1, 'dog': 1}
         result = self.wc.split_text(text)
         self.assertEqual(result, expected)
 

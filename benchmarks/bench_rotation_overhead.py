@@ -27,6 +27,7 @@ def load_text() -> str:
 
 def timed_generate(prefer_horizontal: float) -> float:
     font_path = str(repo_root / "fonts" / "Arial Unicode.ttf")
+    seed = 42
     wc = Wordcloud(
         width=800,
         height=500,
@@ -35,6 +36,7 @@ def timed_generate(prefer_horizontal: float) -> float:
         max_words=200,
         prefer_horizontal=prefer_horizontal,
         rotation_angles=(90, -90),
+        random_state=seed,
     )
     start = time.perf_counter()
     wc.generate(load_text())

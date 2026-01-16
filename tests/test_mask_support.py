@@ -28,8 +28,9 @@ def test_mask_blocks_center():
     assert wc.mask_processor.is_position_available(pos[1], pos[0], 1, 1)
 
 
-def test_mask_dimension_mismatch_raises():
+def test_mask_dimension_mismatch_overrides_canvas():
     mask = np.ones((10, 10), dtype=np.uint8)
-    with pytest.raises(ValueError):
-        Wordcloud(width=20, height=20, mask_image=mask)
+    wc = Wordcloud(width=20, height=20, mask_image=mask)
+    assert wc.width == 10
+    assert wc.height == 10
 

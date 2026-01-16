@@ -7,14 +7,34 @@ for efficient word placement in wordclouds.
 
 import logging
 import math
-from typing import Dict, List, Tuple, Set, Optional, Any, Generator
+import random
+from typing import Dict, List, Tuple, Set, Optional, Any, Generator, Callable
 import numpy as np
 from collections import defaultdict
-from random import randint
 
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
+
+CollisionDetectorFactory = Callable[..., "CollisionDetector"]
+_CUSTOM_DETECTORS: Dict[str, CollisionDetectorFactory] = {}
+
+
+def register_collision_detector(name: str, factory: CollisionDetectorFactory) -> None:
+    if not name:
+        raise ValueError("Detector name must be a non-empty string")
+    if name in _CUSTOM_DETECTORS:
+        raise ValueError(f"Detector '{name}' is already registered")
+    _CUSTOM_DETECTORS[name] = factory
+
+
+def unregister_collision_detector(name: str) -> None:
+    if name in _CUSTOM_DETECTORS:
+        del _CUSTOM_DETECTORS[name]
+
+
+def list_collision_detectors() -> List[str]:
+    return sorted(_CUSTOM_DETECTORS.keys())
 
 
 class CollisionDetector:
@@ -25,7 +45,7 @@ class CollisionDetector:
     Different implementations can optimize for specific scenarios.
     """
     
-    def __init__(self, width: int, height: int):
+    def __init__(self, width: int, height: int, rng: Optional[random.Random] = None):
         """
         Initialize the collision detector.
         
@@ -35,6 +55,7 @@ class CollisionDetector:
         """
         self.width = width
         self.height = height
+        self._rng = rng or random
         
     def add_rectangle(self, rect: Tuple[int, int, int, int]) -> None:
         """
@@ -89,11 +110,11 @@ class BruteForceCollisionDetector(CollisionDetector):
     O(n) lookup time, suitable for small numbers of rectangles.
     """
     
-    def __init__(self, width: int, height: int):
+    def __init__(self, width: int, height: int, rng: Optional[random.Random] = None):
         """
         Initialize the brute force collision detector.
         """
-        super().__init__(width, height)
+        super().__init__(width, height, rng=rng)
         self.rectangles: List[Tuple[int, int, int, int]] = []
         
     def add_rectangle(self, rect: Tuple[int, int, int, int]) -> None:
@@ -144,7 +165,7 @@ class GridCollisionSystem(CollisionDetector):
                             coordinates to occupancy state (True = occupied).
     """
     
-    def __init__(self, width: int, height: int, cell_size: int = 10):
+    def __init__(self, width: int, height: int, cell_size: int = 10, rng: Optional[random.Random] = None):
         """
         Initialize the grid-based collision system.
         
@@ -154,7 +175,7 @@ class GridCollisionSystem(CollisionDetector):
             cell_size: Size of each grid cell. Smaller gives more precision but 
                        uses more memory and potentially more checks per rectangle.
         """
-        super().__init__(width, height)
+        super().__init__(width, height, rng=rng)
         if cell_size <= 0:
             raise ValueError("cell_size must be positive")
         self.cell_size = cell_size
@@ -252,8 +273,8 @@ class GridCollisionSystem(CollisionDetector):
             return None
             
         for _ in range(max_attempts):
-            x = randint(0, self.width - width)
-            y = randint(0, self.height - height)
+            x = self._rng.randint(0, self.width - width)
+            y = self._rng.randint(0, self.height - height)
             
             if self.is_position_available(x, y, width, height):
                 return x, y
@@ -451,7 +472,7 @@ class QuadtreeCollisionDetector(CollisionDetector):
     rectangles, allowing for logarithmic time complexity in the average case.
     """
     
-    def __init__(self, width: int, height: int, max_depth: int = 8, max_objects: int = 10):
+    def __init__(self, width: int, height: int, max_depth: int = 8, max_objects: int = 10, rng: Optional[random.Random] = None):
         """
         Initialize the quadtree collision detector.
         
@@ -461,7 +482,7 @@ class QuadtreeCollisionDetector(CollisionDetector):
             max_depth: Maximum depth of the quadtree
             max_objects: Maximum number of objects per quadtree node
         """
-        super().__init__(width, height)
+        super().__init__(width, height, rng=rng)
         self.root = QuadtreeNode(0, 0, width, height, max_depth, max_objects)
         
     def add_rectangle(self, rect: Tuple[int, int, int, int]) -> None:
@@ -512,7 +533,7 @@ class MaskCollisionDetector(CollisionDetector):
     with irregular shapes.
     """
     
-    def __init__(self, width: int, height: int, mask: Optional[np.ndarray] = None):
+    def __init__(self, width: int, height: int, mask: Optional[np.ndarray] = None, rng: Optional[random.Random] = None):
         """
         Initialize the mask collision detector.
         
@@ -521,7 +542,7 @@ class MaskCollisionDetector(CollisionDetector):
             height: Height of the canvas
             mask: Optional initial mask as 2D boolean array (True = occupied)
         """
-        super().__init__(width, height)
+        super().__init__(width, height, rng=rng)
         
         if mask is not None:
             if mask.shape[0] != height or mask.shape[1] != width:
@@ -629,6 +650,7 @@ def create_collision_detector(
     width: int,
     height: int,
     mask: Optional[np.ndarray] = None,
+    rng: Optional[random.Random] = None,
     **kwargs
 ) -> CollisionDetector:
     """
@@ -650,19 +672,22 @@ def create_collision_detector(
     detector_type = detector_type.lower()
     logger.info(f"Creating collision detector: type={detector_type}, size=({width}x{height})")
 
+    if detector_type in _CUSTOM_DETECTORS:
+        return _CUSTOM_DETECTORS[detector_type](width=width, height=height, mask=mask, rng=rng, **kwargs)
+
     if detector_type == 'brute':
-        return BruteForceCollisionDetector(width, height)
+        return BruteForceCollisionDetector(width, height, rng=rng)
     elif detector_type == 'grid':
         cell_size = kwargs.get('cell_size', 20)
-        return GridCollisionSystem(width, height, cell_size=cell_size)
+        return GridCollisionSystem(width, height, cell_size=cell_size, rng=rng)
     elif detector_type == 'quadtree':
         max_depth = kwargs.get('max_depth', 8)
         max_objects = kwargs.get('max_objects', 10)
-        return QuadtreeCollisionDetector(width, height, max_depth=max_depth, max_objects=max_objects)
+        return QuadtreeCollisionDetector(width, height, max_depth=max_depth, max_objects=max_objects, rng=rng)
     elif detector_type == 'mask':
         if mask is None:
             raise ValueError("Mask array must be provided for 'mask' collision detector.")
-        return MaskCollisionDetector(width, height, mask=mask)
+        return MaskCollisionDetector(width, height, mask=mask, rng=rng)
     else:
         raise ValueError(f"Unknown collision detector type: {detector_type}")
 

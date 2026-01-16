@@ -7,7 +7,7 @@ from __future__ import annotations
 import colorsys
 import logging
 import random
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Tuple, Union, Optional
 
 
 logger = logging.getLogger(__name__)
@@ -58,15 +58,17 @@ def generate_colors_by_frequency(
     color_theme: str = "viridis",
     random_colors: bool = False,
     shuffle: bool = False,
+    rng: Optional[random.Random] = None,
 ) -> Dict[str, str]:
     colors = COLOR_THEMES.get(color_theme, COLOR_THEMES["viridis"]).copy()
+    rng = rng or random
     if shuffle:
-        random.shuffle(colors)
+        rng.shuffle(colors)
     sorted_words = sorted(frequencies.keys(), key=lambda x: frequencies[x], reverse=True)
     word_colors: Dict[str, str] = {}
     if random_colors:
         for word in sorted_words:
-            word_colors[word] = random.choice(colors)
+            word_colors[word] = rng.choice(colors)
     else:
         num_words = len(sorted_words) or 1
         for i, word in enumerate(sorted_words):

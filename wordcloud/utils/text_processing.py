@@ -1,5 +1,5 @@
 from operator import itemgetter
-from typing import Optional, Dict, List, Tuple, Union, Callable
+from typing import Optional, Dict, List, Tuple, Union, Callable, Iterable
 from collections import Counter
 import re
 
@@ -29,7 +29,7 @@ class TextProcessor:
         self,
         min_word_length: int = 3,
         max_words: int = 200,
-        stopwords = [],
+        stopwords: Optional[List[str]] = None,
         language: Optional[str] = None,
         enable_stemming: bool = False,
         enable_lemmatization: bool = False,
@@ -120,6 +120,41 @@ class TextProcessor:
                 ngram = ' '.join(tokens[i:i+n])
                 ngrams.append(ngram)
         return ngrams
+
+    def _process_tokens(
+        self,
+        tokens: List[str],
+        detected_lang: str,
+        combined_stopwords: set,
+        min_len: int,
+    ) -> List[str]:
+        from .multilang import is_cjk_language, contains_cjk_characters
+        processed_tokens = []
+        for token in tokens:
+            # Filter non-alphabetic characters (for non-CJK)
+            if not is_cjk_language(detected_lang) and not contains_cjk_characters(token):
+                token = ''.join([i for i in token if i.isalnum()])
+
+            if not token or len(token) < min_len:
+                continue
+
+            # Case normalization (for non-CJK)
+            if not is_cjk_language(detected_lang) and not contains_cjk_characters(token):
+                token = token.lower()
+
+            # Stopword filtering
+            if token in combined_stopwords:
+                continue
+
+            # Apply stemming or lemmatization
+            if self.enable_stemming:
+                token = self._stem_word(token)
+            elif self.enable_lemmatization:
+                token = self._lemmatize_word(token)
+
+            if token:
+                processed_tokens.append(token)
+        return processed_tokens
     
     def split_text(self, text_to_split, stopwords=None, min_word_length=None):
         """
@@ -159,9 +194,13 @@ class TextProcessor:
             detected_lang = detect_language(text_to_split)
             logger.debug(f"Auto-detected language: {detected_lang}")
         
-        # Get language-specific stopwords
+        # Get language-specific stopwords (can be disabled via options)
         lang_stopwords = get_language_stopwords(detected_lang)
-        combined_stopwords = self.stopwords.union(lang_stopwords)
+        use_language_stopwords = self.text_processor_options.get("use_language_stopwords", True)
+        if use_language_stopwords:
+            combined_stopwords = self.stopwords.union(lang_stopwords)
+        else:
+            combined_stopwords = set(self.stopwords)
         if stopwords:
             combined_stopwords = combined_stopwords.union(set(stopwords))
         
@@ -177,31 +216,7 @@ class TextProcessor:
             tokens = clean_text.split()
         
         # Process tokens
-        processed_tokens = []
-        for token in tokens:
-            # Filter non-alphabetic characters (for non-CJK)
-            if not is_cjk_language(detected_lang) and not contains_cjk_characters(token):
-                token = ''.join([i for i in token if i.isalnum()])
-            
-            if not token or len(token) < min_len:
-                continue
-            
-            # Case normalization (for non-CJK)
-            if not is_cjk_language(detected_lang) and not contains_cjk_characters(token):
-                token = token.lower()
-            
-            # Stopword filtering
-            if token in combined_stopwords:
-                continue
-            
-            # Apply stemming or lemmatization
-            if self.enable_stemming:
-                token = self._stem_word(token)
-            elif self.enable_lemmatization:
-                token = self._lemmatize_word(token)
-            
-            if token:
-                processed_tokens.append(token)
+        processed_tokens = self._process_tokens(tokens, detected_lang, combined_stopwords, min_len)
         
         # Extract n-grams if specified
         if self.n_gram_range:
@@ -218,6 +233,95 @@ class TextProcessor:
         res = dict(Counter(processed_tokens))
         logger.debug(f"Split text into {len(res)} unique words/phrases")
         return res 
+
+    def split_text_stream(
+        self,
+        text_chunks: Iterable[str],
+        stopwords: Optional[List[str]] = None,
+        min_word_length: Optional[int] = None,
+        trim_multiplier: int = 5,
+    ) -> Dict[str, int]:
+        """
+        Stream and preprocess text in chunks, counting word frequencies.
+        """
+        from .multilang import (
+            detect_language, get_language_stopwords, tokenize_cjk,
+            is_cjk_language, normalize_unicode, contains_cjk_characters
+        )
+
+        counter = Counter()
+        buffer = ""
+        carry_tokens: List[str] = []
+        detected_lang = self.language
+        combined_stopwords: Optional[set] = None
+        min_len = min_word_length if min_word_length is not None else self.min_word_length
+
+        def update_stopwords(lang: str) -> set:
+            lang_stopwords = get_language_stopwords(lang)
+            use_language_stopwords = self.text_processor_options.get("use_language_stopwords", True)
+            combined = self.stopwords.union(lang_stopwords) if use_language_stopwords else set(self.stopwords)
+            if stopwords:
+                combined = combined.union(set(stopwords))
+            return combined
+
+        for chunk in text_chunks:
+            if not chunk:
+                continue
+
+            text = normalize_unicode(buffer + chunk)
+            if detected_lang is None:
+                detected_lang = detect_language(text)
+                logger.debug(f"Auto-detected language (stream): {detected_lang}")
+            detected_lang = detected_lang or self.language or "en"
+
+            if combined_stopwords is None:
+                combined_stopwords = update_stopwords(detected_lang)
+
+            if is_cjk_language(detected_lang) or contains_cjk_characters(text):
+                tokens = tokenize_cjk(text, detected_lang)
+                buffer = ""
+            else:
+                clean_text = text.replace("-", " ")
+                clean_text = re.sub(r"[^\w\s]", " ", clean_text, flags=re.UNICODE)
+                if clean_text and clean_text[-1].isalnum():
+                    last_space = clean_text.rfind(" ")
+                    if last_space == -1:
+                        buffer = clean_text
+                        tokens = []
+                    else:
+                        buffer = clean_text[last_space + 1:]
+                        tokens = clean_text[:last_space].split()
+                else:
+                    buffer = ""
+                    tokens = clean_text.split()
+
+            processed_tokens = self._process_tokens(tokens, detected_lang, combined_stopwords, min_len)
+
+            if self.n_gram_range:
+                min_n, max_n = self.n_gram_range
+                merged_tokens = carry_tokens + processed_tokens
+                ngrams = self._extract_ngrams(merged_tokens, min_n, max_n)
+                filtered_ngrams = [
+                    ngram for ngram in ngrams
+                    if len(ngram.replace(' ', '')) >= min_len and ngram not in combined_stopwords
+                ]
+                counter.update(processed_tokens)
+                counter.update(filtered_ngrams)
+                if max_n > 1:
+                    carry_tokens = merged_tokens[-(max_n - 1):]
+            else:
+                counter.update(processed_tokens)
+
+            if trim_multiplier > 0 and len(counter) > self.max_words * trim_multiplier:
+                counter = Counter(dict(counter.most_common(self.max_words * trim_multiplier)))
+
+        if buffer:
+            processed_tokens = self._process_tokens([buffer], detected_lang or self.language or "en", combined_stopwords or set(), min_len)
+            counter.update(processed_tokens)
+
+        res = dict(counter)
+        logger.debug(f"Streamed text into {len(res)} unique words/phrases")
+        return res
     
     def sort_normalize(self, input_words):
         """

@@ -31,7 +31,15 @@ def main() -> None:
     results.mkdir(parents=True, exist_ok=True)
 
     font_path = str(repo_root / "fonts" / "Arial Unicode.ttf")
-    wc = Wordcloud(width=800, height=500, font_path=font_path, max_words=200, prefer_horizontal=1.0)
+    seed = 42
+    wc = Wordcloud(
+        width=800,
+        height=500,
+        font_path=font_path,
+        max_words=200,
+        prefer_horizontal=1.0,
+        random_state=seed,
+    )
 
     t0 = time.perf_counter()
     wc.generate(load_text(), color_theme="viridis")

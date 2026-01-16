@@ -108,7 +108,8 @@ def calculate_font_size(frequency: float, min_font_size: int, max_font_size: int
 
 def assign_fonts_to_words(words: List[Tuple[str, float, int]], 
                           font_paths: Union[str, List[str], Dict[str, str]],
-                          strategy: str = 'frequency') -> Dict[str, str]:
+                          strategy: str = 'frequency',
+                          rng: Optional[random.Random] = None) -> Dict[str, str]:
     """
     Assign fonts to words based on a strategy.
     
@@ -148,8 +149,9 @@ def assign_fonts_to_words(words: List[Tuple[str, float, int]],
     
     elif strategy == 'random':
         # Random assignment
+        rng = rng or random
         for word, _, _ in words:
-            word_fonts[word] = random.choice(font_paths)
+            word_fonts[word] = rng.choice(font_paths)
     
     elif strategy == 'category':
         # Category-based (could be extended with word categories)

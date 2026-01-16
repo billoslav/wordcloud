@@ -21,6 +21,7 @@ from wordcloud import Wordcloud
 from wordcloud.utils import STRATEGIES
 from wordcloud.utils.visualization import COLOR_THEMES
 from wordcloud.utils.helpers import create_folder
+from wordcloud.utils.export import export_batch, normalize_export_formats
 
 
 def validate_api_params(data: Dict[str, Any]) -> tuple[Dict[str, Any], str | None]:
@@ -117,6 +118,24 @@ def validate_api_params(data: Dict[str, Any]) -> tuple[Dict[str, Any], str | Non
     if "black_white" in data:
         params["black_white"] = bool(data["black_white"])
     
+    # Optional: formats
+    if "formats" in data:
+        formats = data["formats"]
+        if isinstance(formats, str):
+            formats = [fmt.strip() for fmt in formats.split(",") if fmt.strip()]
+        if not isinstance(formats, list):
+            return {}, "formats must be a list or comma-separated string"
+        try:
+            params["formats"] = normalize_export_formats(formats)
+        except ValueError as e:
+            return {}, str(e)
+    else:
+        params["formats"] = ["png"]
+    
+    # Optional: html_interactive
+    if "html_interactive" in data:
+        params["html_interactive"] = bool(data["html_interactive"])
+    
     return params, None
 
 
@@ -132,18 +151,23 @@ def create_app() -> "Flask":
         try:
             text = params.pop("text")
             color_theme = params.pop("color_theme", None)
+            formats = params.pop("formats", ["png"])
+            html_interactive = params.pop("html_interactive", True)
             
             # Disable config loading in API to avoid issues with test environments
             params.setdefault('use_config', False)
             wc = Wordcloud(**params)
             wc.generate(text, color_theme=(color_theme if not params.get("black_white", False) else None))
             
-            img = wc.draw_image(save_file=False)
             out_dir = create_folder(tmp_root / job_id)
-            out_path = out_dir / "wordcloud.png"
-            img.save(out_path)
+            results = export_batch(
+                wc,
+                out_dir / "wordcloud",
+                formats,
+                html_interactive=html_interactive,
+            )
             jobs[job_id]["status"] = "completed"
-            jobs[job_id]["result"] = str(out_path)
+            jobs[job_id]["result"] = {fmt: str(path) for fmt, path in results.items()}
         except Exception as exc:  # pragma: no cover - defensive
             jobs[job_id]["status"] = "failed"
             jobs[job_id]["error"] = str(exc)
@@ -196,11 +220,22 @@ def create_app() -> "Flask":
         if job.get("status") != "completed":
             return jsonify({"error": "Job not ready", "status": job.get("status")}), 202
         
-        result_path = job.get("result")
+        format_name = request.args.get("format", "png").lower()
+        result_paths = job.get("result", {})
+        result_path = result_paths.get(format_name)
         if not result_path or not Path(result_path).exists():
             return jsonify({"error": "Result file not found"}), 404
         
-        return send_file(result_path, mimetype="image/png", as_attachment=True)
+        mimetypes = {
+            "png": "image/png",
+            "svg": "image/svg+xml",
+            "html": "text/html",
+            "pdf": "application/pdf",
+            "gif": "image/gif",
+            "webp": "image/webp",
+            "eps": "application/postscript",
+        }
+        return send_file(result_path, mimetype=mimetypes.get(format_name), as_attachment=True)
 
     @app.errorhandler(404)
     def not_found(error):

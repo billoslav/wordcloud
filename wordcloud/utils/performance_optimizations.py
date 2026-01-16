@@ -11,6 +11,7 @@ import logging
 import functools
 import hashlib
 import pickle
+import time
 from typing import Optional, Callable, Any, Dict, List, Tuple
 from pathlib import Path
 import threading
@@ -31,49 +32,92 @@ class LRUCache:
     """
     Simple LRU (Least Recently Used) cache implementation.
     """
-    def __init__(self, max_size: int = 128):
+    def __init__(self, max_size: int = 128, max_age_seconds: Optional[float] = None):
         self.max_size = max_size
+        self.max_age_seconds = max_age_seconds
         self.cache: Dict[str, Any] = {}
         self.access_order: List[str] = []
+        self.timestamps: Dict[str, float] = {}
         self.lock = threading.Lock()
     
     def get(self, key: str) -> Optional[Any]:
         """Get value from cache."""
         with self.lock:
+            if self.max_size <= 0:
+                return None
+            now = time.time()
+            self._prune_expired(now)
             if key in self.cache:
                 # Move to end (most recently used)
                 self.access_order.remove(key)
                 self.access_order.append(key)
+                self.timestamps[key] = now
                 return self.cache[key]
             return None
     
     def put(self, key: str, value: Any) -> None:
         """Put value in cache."""
         with self.lock:
+            if self.max_size <= 0:
+                return
+            now = time.time()
+            self._prune_expired(now)
             if key in self.cache:
                 # Update existing
                 self.access_order.remove(key)
             elif len(self.cache) >= self.max_size:
                 # Remove least recently used
                 lru_key = self.access_order.pop(0)
-                del self.cache[lru_key]
+                self._remove_key(lru_key)
             
             self.cache[key] = value
             self.access_order.append(key)
+            self.timestamps[key] = now
     
     def clear(self) -> None:
         """Clear cache."""
         with self.lock:
             self.cache.clear()
             self.access_order.clear()
+            self.timestamps.clear()
+
+    def _remove_key(self, key: str) -> None:
+        if key in self.cache:
+            del self.cache[key]
+        if key in self.timestamps:
+            del self.timestamps[key]
+        if key in self.access_order:
+            self.access_order.remove(key)
+
+    def _prune_expired(self, now: float) -> None:
+        if self.max_age_seconds is None:
+            return
+        expired_keys = [
+            key for key, timestamp in self.timestamps.items()
+            if now - timestamp > self.max_age_seconds
+        ]
+        for key in expired_keys:
+            self._remove_key(key)
 
 
 class DiskCache:
     """
     Disk-based cache for expensive computations.
     """
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        cache_dir: Optional[Path] = None,
+        max_entries: Optional[int] = None,
+        max_size_bytes: Optional[int] = None,
+        max_age_seconds: Optional[float] = None,
+        cleanup_interval_seconds: int = 600,
+    ):
         self.cache_dir = cache_dir or Path.home() / ".wordcloud_cache"
+        self.max_entries = max_entries
+        self.max_size_bytes = max_size_bytes
+        self.max_age_seconds = max_age_seconds
+        self.cleanup_interval_seconds = cleanup_interval_seconds
+        self._last_cleanup = 0.0
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         logger.debug(f"Disk cache directory: {self.cache_dir}")
     
@@ -85,6 +129,7 @@ class DiskCache:
     
     def get(self, key: str) -> Optional[Any]:
         """Get value from disk cache."""
+        self._maybe_cleanup()
         cache_path = self._get_cache_path(key)
         if cache_path.exists():
             try:
@@ -103,6 +148,8 @@ class DiskCache:
                 pickle.dump(value, f)
         except Exception as e:
             logger.warning(f"Failed to save cache entry {key}: {e}")
+            return
+        self._maybe_cleanup()
     
     def clear(self) -> None:
         """Clear disk cache."""
@@ -112,8 +159,89 @@ class DiskCache:
         except Exception as e:
             logger.warning(f"Failed to clear disk cache: {e}")
 
+    def cleanup(self) -> None:
+        """Remove expired cache files and enforce size limits."""
+        now = time.time()
+        cache_files = list(self.cache_dir.glob("*.cache"))
 
-def cached_result(cache: Optional[LRUCache] = None, key_func: Optional[Callable] = None):
+        if self.max_age_seconds is not None:
+            for cache_file in cache_files:
+                try:
+                    if now - cache_file.stat().st_mtime > self.max_age_seconds:
+                        cache_file.unlink()
+                except Exception as e:
+                    logger.debug(f"Failed to remove expired cache file {cache_file}: {e}")
+
+        cache_files = list(self.cache_dir.glob("*.cache"))
+        if self.max_entries is None and self.max_size_bytes is None:
+            return
+
+        def file_stat(path: Path) -> tuple[Path, float, int]:
+            stat = path.stat()
+            return (path, stat.st_mtime, stat.st_size)
+
+        stats = [file_stat(path) for path in cache_files]
+        stats.sort(key=lambda item: item[1])
+        total_size = sum(size for _, _, size in stats)
+
+        while stats and (
+            (self.max_entries is not None and len(stats) > self.max_entries) or
+            (self.max_size_bytes is not None and total_size > self.max_size_bytes)
+        ):
+            path, _, size = stats.pop(0)
+            try:
+                path.unlink()
+                total_size -= size
+            except Exception as e:
+                logger.debug(f"Failed to remove cache file {path}: {e}")
+
+    def _maybe_cleanup(self) -> None:
+        if self.cleanup_interval_seconds <= 0:
+            self.cleanup()
+            self._last_cleanup = time.time()
+            return
+        now = time.time()
+        if now - self._last_cleanup >= self.cleanup_interval_seconds:
+            self.cleanup()
+            self._last_cleanup = now
+
+
+def _get_cache_settings(cache_settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if cache_settings is not None:
+        return dict(cache_settings)
+    try:
+        from .config import get_config
+        perf_config = get_config().get_performance_config()
+        return dict(perf_config.get("cache", {}))
+    except Exception as e:
+        logger.debug(f"Failed to load cache settings: {e}")
+        return {}
+
+
+def create_disk_cache(
+    cache_dir: Optional[Path] = None,
+    cache_settings: Optional[Dict[str, Any]] = None,
+) -> DiskCache:
+    settings = _get_cache_settings(cache_settings)
+    resolved_dir = cache_dir or (
+        Path(settings["disk_cache_dir"]).expanduser()
+        if settings.get("disk_cache_dir")
+        else None
+    )
+    return DiskCache(
+        cache_dir=resolved_dir,
+        max_entries=settings.get("disk_max_entries"),
+        max_size_bytes=settings.get("disk_max_size_bytes"),
+        max_age_seconds=settings.get("disk_max_age_seconds"),
+        cleanup_interval_seconds=settings.get("disk_cleanup_interval_seconds", 600),
+    )
+
+
+def cached_result(
+    cache: Optional[LRUCache] = None,
+    key_func: Optional[Callable] = None,
+    cache_settings: Optional[Dict[str, Any]] = None,
+):
     """
     Decorator to cache function results.
     
@@ -123,7 +251,11 @@ def cached_result(cache: Optional[LRUCache] = None, key_func: Optional[Callable]
     """
     def decorator(func: Callable) -> Callable:
         if cache is None:
-            func_cache = LRUCache()
+            settings = _get_cache_settings(cache_settings)
+            func_cache = LRUCache(
+                max_size=settings.get("lru_max_size", 128),
+                max_age_seconds=settings.get("lru_max_age_seconds"),
+            )
         else:
             func_cache = cache
         
@@ -206,10 +338,9 @@ def optimize_memory_usage(wordcloud_instance) -> None:
     # Clear font cache if it's too large
     if hasattr(wordcloud_instance, '_font_cache'):
         font_cache = wordcloud_instance._font_cache
-        if hasattr(font_cache, 'cache') and len(font_cache.cache) > 100:
-            # Keep only most recently used fonts
-            logger.debug("Clearing old font cache entries")
-            # Implementation depends on FontCache structure
+        if hasattr(font_cache, 'clear'):
+            logger.debug("Clearing font cache entries")
+            font_cache.clear()
     
     # Clear performance metrics if not needed
     if hasattr(wordcloud_instance, 'performance_metrics'):

@@ -38,6 +38,28 @@ except ImportError:  # pragma: no cover
 
 logger = get_logger(__name__)
 
+SUPPORTED_EXPORT_FORMATS = {
+    "png",
+    "svg",
+    "html",
+    "pdf",
+    "gif",
+    "webp",
+    "eps",
+}
+
+
+def _is_file_like(output: Any) -> bool:
+    return hasattr(output, "write")
+
+
+def _normalize_output_path(output: Union[str, Path], label: str) -> Path:
+    if output is None:
+        raise ValueError(f"{label} output path is required")
+    output_path = Path(output)
+    if output_path.exists() and output_path.is_dir():
+        raise ValueError(f"{label} output path must be a file, got directory: {output_path}")
+    return ensure_parent_dir(output_path)
 
 def export_image(image: "Image.Image", output_path: Union[str, Path], optimize: bool = True) -> None:
     """
@@ -46,8 +68,11 @@ def export_image(image: "Image.Image", output_path: Union[str, Path], optimize: 
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow required for image export. Install with 'pip install Pillow'.")
 
-    output_path = ensure_parent_dir(output_path)
-    image.save(output_path, format="PNG", optimize=optimize)
+    if image is None or not hasattr(image, "save"):
+        raise ValueError("Valid PIL Image is required for image export.")
+
+    output_path = _normalize_output_path(output_path, "Image")
+    image.save(str(output_path), optimize=optimize)
     logger.info("Image saved to %s", output_path)
 
 
@@ -65,9 +90,16 @@ def export_webp(image: "Image.Image", output_path: Union[str, Path],
     """
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow required for WebP export. Install with 'pip install Pillow'.")
+
+    if image is None or not hasattr(image, "save"):
+        raise ValueError("Valid PIL Image is required for WebP export.")
+    if not (0 <= quality <= 100):
+        raise ValueError("quality must be between 0 and 100")
+    if not (0 <= method <= 6):
+        raise ValueError("method must be between 0 and 6")
     
     try:
-        output_path = ensure_parent_dir(output_path)
+        output_path = _normalize_output_path(output_path, "WebP")
         save_kwargs = {
             "format": "WEBP",
             "quality": quality,
@@ -91,11 +123,11 @@ def export_eps(wordcloud_instance, output_path: Union[str, Path]) -> None:
         wordcloud_instance: Wordcloud instance with gen_positions
         output_path: Output file path
     """
-    if not wordcloud_instance.gen_positions:
+    if not wordcloud_instance or not getattr(wordcloud_instance, "gen_positions", None):
         raise ValueError("Wordcloud has no generated positions. Call generate() first.")
     
     try:
-        output_path = ensure_parent_dir(output_path)
+        output_path = _normalize_output_path(output_path, "EPS")
         
         with open(output_path, 'w', encoding='utf-8') as f:
             # EPS header
@@ -223,6 +255,10 @@ class PDFExporter:
         """
         if not REPORTLAB_AVAILABLE:
             raise RuntimeError("ReportLab is required for PDF export. Install with 'pip install reportlab'.")
+        if not PIL_AVAILABLE:
+            raise RuntimeError("Pillow is required for PDF export. Install with 'pip install Pillow'.")
+        if image is None or not hasattr(image, "size"):
+            raise ValueError("Valid PIL Image is required for PDF export.")
             
         # Determine page size
         page_size_val = PAGE_SIZES.get(page_size.lower(), A4)
@@ -234,9 +270,11 @@ class PDFExporter:
             
         # Create PDF canvas
         if isinstance(output, (str, Path)):
-            output_path = ensure_parent_dir(output)
+            output_path = _normalize_output_path(output, "PDF")
             c = canvas.Canvas(str(output_path), pagesize=page_size_val)
         else:
+            if not _is_file_like(output):
+                raise ValueError("PDF output must be a file path or a file-like object")
             c = canvas.Canvas(output, pagesize=page_size_val)
             
         try:
@@ -346,6 +384,8 @@ class AnimatedGIFExporter:
             
         if not frames:
             raise ValueError("No frames provided for animation")
+        if any(frame is None or not hasattr(frame, "save") for frame in frames):
+            raise ValueError("All frames must be valid PIL Images")
             
         try:
             save_kwargs = {
@@ -361,12 +401,14 @@ class AnimatedGIFExporter:
                 save_kwargs["disposal"] = disposal
 
             if isinstance(output, (str, Path)):
-                output_path = ensure_parent_dir(output)
+                output_path = _normalize_output_path(output, "GIF")
                 
                 # Save the GIF
                 frames[0].save(str(output_path), **save_kwargs)
             else:
                 # Save to file-like object
+                if not _is_file_like(output):
+                    raise ValueError("GIF output must be a file path or a file-like object")
                 frames[0].save(output, **save_kwargs)
                 
         except Exception as e:
@@ -536,6 +578,8 @@ class SVGExporter:
         Raises:
             IOError: If there's an error writing the SVG
         """
+        if not svg_content:
+            raise ValueError("SVG content is empty")
         if minify:
             # Basic minification: remove whitespace and comments
             svg_content = self._minify_svg(svg_content)
@@ -543,18 +587,16 @@ class SVGExporter:
         try:
             if isinstance(output, (str, Path)):
                 # Use helper function to create folder
-                output_path = Path(output)
-                create_folder(output_path.parent)
+                output_path = _normalize_output_path(output, "SVG")
                 
-                with open(output_path, 'w', encoding='utf-8') as f:
+                with open(str(output_path), 'w', encoding='utf-8') as f:
                     f.write(svg_content)
             else:
                 # Write to file-like object
-                if hasattr(output, 'write'):
-                    # Encode if writing to a binary stream
-                    output.write(svg_content.encode('utf-8') if isinstance(output, io.BufferedIOBase) else svg_content)
-                else:
-                    raise ValueError("Output must be a file path or a file-like object")
+                if not _is_file_like(output):
+                    raise ValueError("SVG output must be a file path or a file-like object")
+                # Encode if writing to a binary stream
+                output.write(svg_content.encode('utf-8') if isinstance(output, io.BufferedIOBase) else svg_content)
             
             logger.info(f"SVG saved to {output}")
 
@@ -658,7 +700,7 @@ class SVGExporter:
 
                 # Adjust coordinates: PIL draws relative to top-left, SVG uses baseline
                 svg_x = x - bbox[0]
-                svg_y = y + (ascent - bbox[1]) # Adjust y based on ascent and bbox top
+                svg_y = y + ascent
 
                 # Handle rotation (optional - basic implementation)
                 transform = f"translate({svg_x},{svg_y})"
@@ -673,7 +715,21 @@ class SVGExporter:
                 escaped_id = word.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").replace("'", "&apos;")
 
                 # Create text element
-                result.append(f'<text id="{escaped_id}" transform="{transform}" font-size="{font_size}" style="fill:{color}" count="{count}">{escaped_word}</text>')
+                text_length = None
+                if hasattr(font, "getlength"):
+                    try:
+                        text_length = font.getlength(word)
+                    except Exception:
+                        text_length = None
+                if text_length is None:
+                    text_length = max(0, bbox[2] - bbox[0])
+
+                result.append(
+                    f'<text id="{escaped_id}" transform="{transform}" font-size="{font_size}" '
+                    f'style="fill:{color}" count="{count}" '
+                    f'font-kerning="normal" dominant-baseline="alphabetic" text-anchor="start" '
+                    f'lengthAdjust="spacingAndGlyphs" textLength="{text_length:.2f}">{escaped_word}</text>'
+                )
             except Exception as e:
                 logger.error(f"Error processing word '{word}' for SVG: {e}")
 
@@ -751,6 +807,65 @@ def get_svg_exporter() -> SVGExporter:
         _svg_exporter = SVGExporter()
     return _svg_exporter
 
+
+def normalize_export_formats(formats: List[str]) -> List[str]:
+    normalized = [fmt.strip().lower() for fmt in formats if fmt and fmt.strip()]
+    if not normalized:
+        raise ValueError("At least one export format must be provided")
+    invalid = [fmt for fmt in normalized if fmt not in SUPPORTED_EXPORT_FORMATS]
+    if invalid:
+        raise ValueError(f"Unsupported export format(s): {', '.join(invalid)}")
+    return normalized
+
+
+def export_batch(
+    wc: Any,
+    output_base: Union[str, Path],
+    formats: List[str],
+    html_interactive: bool = True,
+    webp_quality: int = 80,
+    webp_lossless: bool = False,
+    gif_frames: int = 3,
+) -> Dict[str, Path]:
+    if wc is None or not getattr(wc, "gen_positions", None):
+        raise ValueError("Wordcloud has no generated positions. Call generate() first.")
+
+    formats = normalize_export_formats(formats)
+    output_base = Path(output_base)
+    base = output_base.with_suffix("") if output_base.suffix else output_base
+
+    results: Dict[str, Path] = {}
+    image = None
+
+    for fmt in formats:
+        out_path = base.with_suffix(f".{fmt}")
+        if fmt == "png":
+            image = image or wc.draw_image(save_file=False)
+            export_image(image, out_path)
+        elif fmt == "webp":
+            image = image or wc.draw_image(save_file=False)
+            export_webp(image, out_path, quality=webp_quality, lossless=webp_lossless)
+        elif fmt == "svg":
+            svg_content = wc.generate_svg(save_file=False)
+            SVGExporter().export_svg(svg_content, out_path)
+        elif fmt == "html":
+            html_content = wc.create_html(interactive=html_interactive, save_file=False)
+            output_path = _normalize_output_path(out_path, "HTML")
+            output_path.write_text(html_content, encoding="utf-8")
+        elif fmt == "pdf":
+            image = image or wc.draw_image(save_file=False)
+            PDFExporter().export_pdf(image, out_path)
+        elif fmt == "gif":
+            image = image or wc.draw_image(save_file=False)
+            frames = [image] * max(gif_frames, 1)
+            AnimatedGIFExporter().export_animated_gif(frames, out_path)
+        elif fmt == "eps":
+            export_eps(wc, out_path)
+
+        results[fmt] = out_path
+
+    return results
+
 # --- Simple HTML Export ---
 
 def export_simple_html(
@@ -777,6 +892,9 @@ def export_simple_html(
     Returns:
         The generated HTML content as a string.
     """
+    if width <= 0 or height <= 0:
+        raise ValueError("HTML export width and height must be positive")
+
     html_content = []
     html_content.append("<!DOCTYPE html>")
     html_content.append("<html>")
@@ -845,7 +963,7 @@ def export_simple_html(
     # Save to file if requested
     if output_file:
         try:
-            output_path = ensure_parent_dir(output_file)
+            output_path = _normalize_output_path(output_file, "HTML")
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(final_html)
             logger.info(f"Simple HTML word cloud saved to: {output_path.resolve()}")
@@ -854,19 +972,19 @@ def export_simple_html(
 
     return final_html
 
-def export_interactive_html(wc: Any, output_path: Union[str, Path]) -> None:
+def export_interactive_html(wc: Any, output_path: Union[str, Path, None] = None) -> str:
     """
     Generates and saves an advanced interactive HTML visualization.
 
     Args:
         wc: The Wordcloud instance containing generated data.
-        output_path: The path to save the HTML file.
+        output_path: Optional path to save the HTML file.
 
     Raises:
         RuntimeError: If required data (gen_positions) is missing.
         IOError: If there's an error saving the HTML file.
     """
-    if not wc.gen_positions:
+    if wc is None or not getattr(wc, "gen_positions", None):
         raise RuntimeError("Cannot generate interactive HTML: Wordcloud positions not generated yet.")
 
     # Generate base SVG content using the utility function
@@ -915,6 +1033,14 @@ def export_interactive_html(wc: Any, output_path: Union[str, Path]) -> None:
     .wordcloud-container {
       flex-grow: 1;
       position: relative; /* Needed for absolute positioning of info panel */
+    }
+    #wordcloud-svg {
+      transform-origin: 0 0;
+      cursor: grab;
+      user-select: none;
+    }
+    #wordcloud-svg.dragging {
+      cursor: grabbing;
     }
     .controls-panel {
       width: 300px;
@@ -1017,6 +1143,37 @@ def export_interactive_html(wc: Any, output_path: Union[str, Path]) -> None:
       opacity: 1 !important; /* Ensure hover overrides dimming */
       fill: var(--highlight-color) !important; /* Highlight color */
     }
+    svg text.word-dimmed {
+      opacity: 0.2;
+    }
+    svg text.word-highlight {
+      fill: var(--highlight-color) !important;
+      opacity: 1 !important;
+    }
+    .search-section input {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid var(--panel-border-color);
+      border-radius: 4px;
+      margin-bottom: 6px;
+    }
+    .search-count {
+      font-size: 0.85em;
+      color: var(--primary-color);
+    }
+    .zoom-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .zoom-controls input[type="range"] {
+      flex: 1;
+    }
+    .zoom-hint {
+      font-size: 0.8em;
+      color: #666;
+      margin-top: 6px;
+    }
     @keyframes fadeIn {
       to { opacity: 1; }
     }
@@ -1028,7 +1185,7 @@ def export_interactive_html(wc: Any, output_path: Union[str, Path]) -> None:
     html_content.append("""
   <div class="wordcloud-container">
     <!-- SVG will be embedded here -->
-    {svg_inner}
+    {svg_wrapper}
     <div id="info-panel">
       <h3 id="word-title">Word Info</h3>
       <div>Count: <span id="word-count"></span></div>
@@ -1049,6 +1206,10 @@ def export_interactive_html(wc: Any, output_path: Union[str, Path]) -> None:
     
     <div class="word-list-section">
       <h3>Top Words</h3>
+      <div class="search-section">
+        <input id="search-input" type="text" placeholder="Find a word">
+        <div id="search-count" class="search-count"></div>
+      </div>
       <div id="word-list-container">
         <!-- Word list will be populated by JS -->
       </div>
@@ -1056,6 +1217,12 @@ def export_interactive_html(wc: Any, output_path: Union[str, Path]) -> None:
     
     <div class="controls-section">
       <h3>Controls</h3>
+      <div class="zoom-controls">
+        <button id="zoom-out" type="button">-</button>
+        <input id="zoom-range" type="range" min="50" max="200" value="100">
+        <button id="zoom-in" type="button">+</button>
+      </div>
+      <div class="zoom-hint">Drag to pan</div>
       <select id="theme-selector">
         <option value="default">Default Theme</option>
         <option value="dark">Dark Theme</option>
@@ -1078,20 +1245,25 @@ def export_interactive_html(wc: Any, output_path: Union[str, Path]) -> None:
     else:
         svg_inner = svg_match.group(1)
 
+    svg_wrapper = (
+        f'<svg id="wordcloud-svg" width="{wc.width}" height="{wc.height}" '
+        f'viewBox="0 0 {wc.width} {wc.height}">{svg_inner}</svg>'
+    )
+
     # Insert SVG content into the body structure
     # Find the placeholder and replace it
-    placeholder = "{svg_inner}"
+    placeholder = "{svg_wrapper}"
     body_index = -1
     for i, line in enumerate(html_content):
         if placeholder in line:
-            html_content[i] = line.replace(placeholder, svg_inner)
+            html_content[i] = line.replace(placeholder, svg_wrapper)
             body_index = i
             break
             
     if body_index == -1:
         logger.error("Could not find SVG placeholder in HTML template.")
         # Append SVG at the end as fallback
-        html_content.insert(-1, svg_inner) 
+        html_content.insert(-1, svg_wrapper) 
 
     # JavaScript (adapted from Wordcloud.generate_interactive_html)
     js_content = []
@@ -1150,6 +1322,7 @@ def export_interactive_html(wc: Any, output_path: Union[str, Path]) -> None:
     topWords.forEach(word => {
       const div = document.createElement('div');
       div.className = 'word-item';
+      div.dataset.word = word.toLowerCase();
       // Escape HTML entities for display
       const escapedWord = word.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
       div.innerHTML = `
@@ -1174,6 +1347,111 @@ def export_interactive_html(wc: Any, output_path: Union[str, Path]) -> None:
       });
       wordListContainer.appendChild(div);
     });
+
+    const svgElement = document.getElementById('wordcloud-svg');
+    const zoomRange = document.getElementById('zoom-range');
+    const zoomInBtn = document.getElementById('zoom-in');
+    const zoomOutBtn = document.getElementById('zoom-out');
+    const searchInput = document.getElementById('search-input');
+    const searchCount = document.getElementById('search-count');
+    const wordItems = Array.from(document.querySelectorAll('.word-item'));
+
+    let currentScale = 1.0;
+    let translate = { x: 0, y: 0 };
+    let isPanning = false;
+    let panStart = { x: 0, y: 0 };
+
+    function applyTransform() {
+      if (!svgElement) return;
+      svgElement.style.transform = `translate(${translate.x}px, ${translate.y}px) scale(${currentScale})`;
+    }
+
+    function setScale(scale) {
+      currentScale = Math.min(2.0, Math.max(0.5, scale));
+      if (zoomRange) zoomRange.value = Math.round(currentScale * 100);
+      applyTransform();
+    }
+
+    if (zoomRange) {
+      zoomRange.addEventListener('input', (e) => {
+        const value = parseFloat(e.target.value || 100);
+        setScale(value / 100);
+      });
+    }
+
+    if (zoomInBtn) {
+      zoomInBtn.addEventListener('click', () => {
+        setScale(currentScale + 0.1);
+      });
+    }
+
+    if (zoomOutBtn) {
+      zoomOutBtn.addEventListener('click', () => {
+        setScale(currentScale - 0.1);
+      });
+    }
+
+    if (svgElement) {
+      svgElement.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        isPanning = true;
+        panStart = { x: e.clientX - translate.x, y: e.clientY - translate.y };
+        svgElement.classList.add('dragging');
+        e.preventDefault();
+      });
+    }
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isPanning) return;
+      translate = { x: e.clientX - panStart.x, y: e.clientY - panStart.y };
+      applyTransform();
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!isPanning) return;
+      isPanning = false;
+      if (svgElement) svgElement.classList.remove('dragging');
+    });
+
+    function applySearch(query) {
+      const normalized = (query || '').trim().toLowerCase();
+      let matches = 0;
+
+      document.querySelectorAll('svg text').forEach(textEl => {
+        const text = (textEl.textContent || '').toLowerCase();
+        if (!normalized) {
+          textEl.classList.remove('word-highlight', 'word-dimmed');
+          return;
+        }
+        if (text.includes(normalized)) {
+          textEl.classList.add('word-highlight');
+          textEl.classList.remove('word-dimmed');
+          matches += 1;
+        } else {
+          textEl.classList.remove('word-highlight');
+          textEl.classList.add('word-dimmed');
+        }
+      });
+
+      wordItems.forEach(item => {
+        const word = item.dataset.word || '';
+        if (!normalized || word.includes(normalized)) {
+          item.style.display = '';
+        } else {
+          item.style.display = 'none';
+        }
+      });
+
+      if (searchCount) {
+        searchCount.textContent = normalized ? `${matches} match${matches === 1 ? '' : 'es'}` : '';
+      }
+    }
+
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => {
+        applySearch(e.target.value);
+      });
+    }
     
     // Set up event listeners for words in SVG
     document.querySelectorAll('svg text').forEach(textElement => {
@@ -1246,6 +1524,12 @@ def export_interactive_html(wc: Any, output_path: Union[str, Path]) -> None:
         t.style.opacity = '1';
       });
       document.getElementById('info-panel').style.display = 'none';
+      translate = { x: 0, y: 0 };
+      setScale(1.0);
+      if (searchInput) {
+        searchInput.value = '';
+        applySearch('');
+      }
     });
     
     // Theme selector functionality
@@ -1333,14 +1617,17 @@ def export_interactive_html(wc: Any, output_path: Union[str, Path]) -> None:
 
     html_content.append('\n'.join(js_content))
     
-    # Save the final HTML
-    output_path = Path(output_path)
-    create_folder(output_path.parent)
+    final_html = '\n'.join(html_content)
 
-    try:
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write('\n'.join(html_content))
-        logger.info(f"Interactive HTML saved to {output_path}")
-    except Exception as e:
-        logger.error(f"Error saving interactive HTML file {output_path}: {e}")
-        raise IOError(f"Failed to save interactive HTML: {e}") 
+    if output_path:
+        output_path = _normalize_output_path(output_path, "HTML")
+
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write(final_html)
+            logger.info(f"Interactive HTML saved to {output_path}")
+        except Exception as e:
+            logger.error(f"Error saving interactive HTML file {output_path}: {e}")
+            raise IOError(f"Failed to save interactive HTML: {e}")
+
+    return final_html

@@ -1,4 +1,4 @@
-from PIL import ImageFont, ImageDraw
+from PIL import Image, ImageFont, ImageDraw
 from typing import Dict, Tuple, Optional, Any
 import logging
 
@@ -20,6 +20,7 @@ class FontCache:
     def __init__(self):
         self._font_cache: Dict[Tuple[str, int], Any] = {}
         self._bbox_cache: Dict[Tuple[str, str, int, Optional[int]], Tuple[int, int, int, int]] = {}
+        self._rotated_bbox_cache: Dict[Tuple[str, str, int, int], Tuple[int, int, int, int]] = {}
         logger.info("FontCache initialized")
 
     def get_font(self, font_path: str, font_size: int) -> Any:
@@ -67,3 +68,45 @@ class FontCache:
             logger.debug(f"Cache hit for bbox: {key}")
         return self._bbox_cache[key]
 
+    def get_rotated_bbox(
+        self,
+        text: str,
+        font_path: str,
+        font_size: int,
+        rotation_degrees: int,
+    ) -> Tuple[int, int, int, int]:
+        """
+        Return a bounding box for text rotated by an arbitrary angle.
+        """
+        if not isinstance(rotation_degrees, int):
+            raise TypeError("rotation_degrees must be an integer")
+        if not isinstance(text, str):
+            raise TypeError("text must be a string")
+
+        key = (text, font_path, font_size, rotation_degrees)
+        if key in self._rotated_bbox_cache:
+            return self._rotated_bbox_cache[key]
+
+        font = self.get_font(font_path, font_size)
+        bbox = font.getbbox(text)
+        width = max(0, bbox[2] - bbox[0])
+        height = max(0, bbox[3] - bbox[1])
+        if width == 0 or height == 0:
+            rotated_bbox = (0, 0, 0, 0)
+            self._rotated_bbox_cache[key] = rotated_bbox
+            return rotated_bbox
+
+        base = Image.new("L", (width, height), 0)
+        draw = ImageDraw.Draw(base)
+        draw.text((-bbox[0], -bbox[1]), text, font=font, fill=255)
+        rotated = base.rotate(rotation_degrees, expand=True, resample=Image.BICUBIC)
+        rotated_bbox = (0, 0, rotated.size[0], rotated.size[1])
+        self._rotated_bbox_cache[key] = rotated_bbox
+        return rotated_bbox
+
+    def clear(self) -> None:
+        """Clear all cached font and bbox entries."""
+        self._font_cache.clear()
+        self._bbox_cache.clear()
+        self._rotated_bbox_cache.clear()
+        logger.debug("FontCache cleared")

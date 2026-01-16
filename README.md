@@ -15,19 +15,21 @@ A flexible and powerful Python library for creating visually appealing word clou
 
 ## Documentation
 
-- Examples: `examples/README.md`
+- Docs index: `DOCS_INDEX.md`
+- Architecture: `ARCHITECTURE.md`
+- Examples: `examples/README.md`, `docs/examples.md`
 - Benchmarks: `docs/benchmarks.md`
+- API: `docs/api.md`
 
 ## Installation
 
-"""
-bash
+```bash
 pip install wordcloud
-"""
+```
 
 ## Quick Start
 
-"""python
+```python
 from wordcloud import Wordcloud
 
 # Create a wordcloud instance
@@ -40,13 +42,13 @@ wc.generate("Your text goes here...").draw_plt_image()
 
 # Save the wordcloud as an image
 wc.draw_image(save_file=True, image_name="my_wordcloud")
-"""
+```
 
 ## Usage Examples
 
 ### Basic Word Cloud
 
-"""python
+```python
 from wordcloud import Wordcloud
 
 # Create a simple word cloud from a text string
@@ -55,11 +57,11 @@ text = "Python is an amazing programming language for data analysis, machine lea
 wc = Wordcloud()
 wc.generate(text)
 wc.draw_plt_image()  # Display the wordcloud
-"""
+```
 
 ### Customized Word Cloud
 
-"""python
+```python
 from wordcloud import Wordcloud
 
 # Create a customized word cloud
@@ -81,11 +83,11 @@ with open("sample_text.txt", "r") as f:
 
 wc.generate(text)
 wc.draw_image(save_file=True, image_name="custom_wordcloud")
-"""
+```
 
 ### Masked Word Cloud
 
-"""python
+```python
 import numpy as np
 from wordcloud import Wordcloud
 
@@ -96,26 +98,25 @@ mask = (x * x + y * y <= radius * radius).astype(np.uint8)
 
 wc = Wordcloud(width=300, height=300, mask_image=mask, background_color="white")
 wc.generate("Masked word cloud example").draw_image(save_file=True, image_name="masked_wordcloud")
-"""
+```
 
 ### CLI Usage
 
-"""bash
+```bash
 wordcloud --text "hello world from cli" --output Results/cli_example.png --width 400 --height 200
-"""
+```
 
 ### API (optional, requires Flask)
 
-"""bash
+```bash
 python -c "from wordcloud.api import run_api; run_api(port=5001)"
 # In another shell:
 curl -X POST http://localhost:5001/api/generate -H "Content-Type: application/json" -d '{"text":"hello api"}'
-"""
+```
 
 ### Interactive HTML Word Cloud
 
-"""
-python
+```python
 from wordcloud import Wordcloud
 
 # Create a word cloud and export as interactive HTML
@@ -127,14 +128,13 @@ svg_content = wc.generate_svg()
 
 # Create HTML with the SVG and interactive tooltips
 html_content = wc.create_html(svg_content, save_file=True, file_name="interactive_wordcloud")
-"""
+```
 
 ### Rotation / Orientation
 
 Words can be rotated by 90 degrees (vertical text).
 
-"""
-python
+```python
 from wordcloud import Wordcloud
 
 wc = Wordcloud(
@@ -144,14 +144,13 @@ wc = Wordcloud(
     rotation_angles=(90, -90),
 )
 wc.generate("Rotation example").draw_image(save_file=True, image_name="rotation_example")
-"""
+```
 
 CLI rotation:
 
-"""
-bash
+```bash
 wordcloud --text "rotation example" --output Results/rot.png --prefer-horizontal 0.7 --rotate-angles "90,-90"
-"""
+```
 
 ## Word Placement Strategies
 
@@ -169,10 +168,10 @@ The `place_strategy` parameter controls how words are positioned in the cloud:
 - `"pytag_reverse"`: Reverse PyTagCloud spiral
 
 Example:
-"""python
+```python
 # Create a wordcloud with an Archimedean spiral layout
 wc = Wordcloud(place_strategy="archimedian")
-"""
+```
 
 ## API Reference
 
@@ -215,17 +214,16 @@ Main class for generating wordclouds from text.
 
 ### Using Context Managers
 
-"""
-python
+```python
 # Use the wordcloud as a context manager
 with Wordcloud(width=800, height=400) as wc:
     wc.generate("Text for the wordcloud...")
     wc.draw_image(save_file=True)
-"""
+```
 
 ### Updating Colors
 
-"""python
+```python
 # Create basic wordcloud
 wc = Wordcloud()
 wc.generate("Text for the wordcloud...")
@@ -241,11 +239,11 @@ word_colors = {
     "data": "green"
 }
 wc.update_colors(word_colors)
-"""
+```
 
 ### Updating Positions with New Fonts
 
-"""python
+```python
 # Create a wordcloud
 wc = Wordcloud()
 wc.generate("Text for the wordcloud...")
@@ -253,7 +251,7 @@ wc.generate("Text for the wordcloud...")
 # Update positions with new fonts
 new_fonts = ["fonts/OpenSans-Bold.ttf", "fonts/Roboto-Regular.ttf"]
 wc.update_position(new_fonts)
-"""
+```
 
 ## About This Project
 
